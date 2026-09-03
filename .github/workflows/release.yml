@@ -1,0 +1,100 @@
+name: release
+
+# A tag is the release. Go needs nothing beyond it — the module proxy reads
+# tags directly — so this workflow exists for the package that does need a
+# push, and for the two checks worth making before anything leaves the repo:
+# that all four suites agree at the tagged commit, and that the tag and the
+# manifests name the same version.
+#
+# Prerequisite: the NPM_TOKEN secret must exist before the first tag. npm
+# trusted publishing is the better arrangement, but it can only be configured
+# against a package that already exists, so it is a post-0.1.0 change.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  # Publishing an artifact the suites have not agreed on is the failure this
+  # guards against. Four languages, run from the tagged commit.
+  verify:
+    uses: ./.github/workflows/ci.yml
+
+  versions-agree:
+    name: tag and manifests agree
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: compare
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          fail=0
+          check() { # check <label> <found>
+            if [ "$2" = "$tag" ]; then
+              printf '  ok   %-20s %s\n' "$1" "$2"
+            else
+              echo "::error::$1 says $2, tag says $tag"; fail=1
+            fi
+          }
+          check "node/package.json" \
+            "$(node -p 'require("./node/package.json").version')"
+          check "java/pom.xml" "$(python3 -c "
+          import xml.etree.ElementTree as E
+          ns = {'m': 'http://maven.apache.org/POM/4.0.0'}
+          print(E.parse('java/pom.xml').getroot().find('m:version', ns).text)")"
+          # php/composer.json carries no version field on purpose: Packagist
+          # derives it from the tag, and a second source of truth only drifts.
+          exit $fail
+
+  npm:
+    name: npm
+    needs: [verify, versions-agree]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: node
+    permissions:
+      contents: read
+      id-token: write # provenance attestation
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: https://registry.npmjs.org
+      # No package-lock.json in the repo — bun.lock is what developers use —
+      # so this is install rather than ci. The only dependencies are
+      # typescript and @types/node; nothing here ships at runtime.
+      - run: npm install --ignore-scripts
+      # Built as its own step so a type error reads as a compile failure
+      # rather than as a publish failure. prepublishOnly runs tsc again.
+      - run: npm run build
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  github-release:
+    name: github release
+    needs: [npm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: notes from CHANGELOG
+        run: |
+          awk -v v="${GITHUB_REF_NAME#v}" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## \[/         { exit }
+            on                     { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::error::CHANGELOG.md has no section for ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+      - run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md
+        env:
+          GH_TOKEN: ${{ github.token }}

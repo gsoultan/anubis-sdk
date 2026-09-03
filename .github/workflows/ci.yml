@@ -9,6 +9,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # release.yml calls this before it publishes anything, so a release cannot
+  # ship an artifact that the four suites have not agreed on.
+  workflow_call:
 
 permissions:
   contents: read

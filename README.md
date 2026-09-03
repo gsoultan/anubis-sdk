@@ -16,6 +16,12 @@ would rather POST JSON yourself.
 | **Java** | `io.github.gsoultan:anubis-sdk` | Maven / Gradle | jackson-databind (JSON only) |
 | **Node** | `@gsoultan/anubis-sdk` | `npm i @gsoultan/anubis-sdk` | none — `fetch` + `node:crypto` |
 
+As of `v0.1.0` the Go and Node rows work as written. PHP and Java are built and
+tested from the same tag but are not on Packagist and Maven Central yet: until
+they are, take PHP through a `vcs` repository entry pointing at this repo, and
+Java by cloning and running `mvn install` in `java/`. `anubiskit` is
+deliberately untagged — see [CHANGELOG.md](CHANGELOG.md).
+
 No third-party cryptography in any of them: Ed25519 comes from `crypto/ed25519`,
 `node:crypto`, ext-sodium and the JDK respectively. PASETO `v4.public` is a
 format, and formats are written here; primitives are not.
