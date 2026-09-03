@@ -48,10 +48,17 @@ First release.
 
 ### Published
 
-Go (`github.com/gsoultan/anubis-sdk`) and Node
-(`@gsoultan/anubis-sdk`). PHP and Java ship from this tag but are not yet on
-Packagist and Maven Central — see the README for how to consume them until
-they are. `anubiskit` is deliberately untagged: its `replace` directives are
-ignored by downstream modules, so it is not yet consumable as a dependency.
+Go (`github.com/gsoultan/anubis-sdk`), Node (`@gsoultan/anubis-sdk`) and PHP
+(`gsoultan/anubis-sdk`, from the read-only mirror that
+`scripts/release/php-split.sh` produces — Packagist reads `composer.json` only
+from a repository root, and this one lives in `php/`).
+
+Java is built and tested from this tag but is not on Maven Central yet:
+Sonatype namespace verification and artefact signing are their own piece of
+work. Until then, `mvn install` in `java/`.
+
+`anubiskit` is deliberately untagged. Its `replace` directives are ignored by
+downstream modules, so `require github.com/gsoultan/anubis-sdk v0.0.0` would
+fail to resolve for anyone consuming it.
 
 [0.1.0]: https://github.com/gsoultan/anubis-sdk/releases/tag/v0.1.0
