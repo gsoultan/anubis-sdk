@@ -168,8 +168,23 @@ GET /.well-known/anubis-keys.json
 
 ```jsonc
 { "issuer": "https://anubis.internal",
-  "keys": [{ "kid": "…", "alg": "Ed25519", "public_key": "<base64url, 32 bytes>" }] }
+  "keys": [{ "kid": "…", "alg": "Ed25519", "public_key": "<base64url, 32 bytes>",
+             "not_before": …, "not_after": … }] }
 ```
+
+Fetch it over a channel you trust: whoever answers this URL decides which keys
+a verifier accepts, and therefore who can mint tokens it honours. Plaintext
+`http` is refused unless the host is loopback.
+
+`issuer` binds the document to a deployment. A verifier that loads whatever
+keys its URL happens to serve cannot notice it was pointed at staging, so it
+matches this field against its own configured issuer and refuses a mismatch.
+
+`not_before` / `not_after` bound when a **verifier trusts** the key — not when
+the issuer stops signing with it. A token minted a second before `not_after` is
+rejected the moment it passes, so publish `not_after` at least one maximum
+token lifetime after the key's last signing time or a rotation will reject
+tokens that are still live. Either bound at zero is unbounded.
 
 Tokens are PASETO `v4.public`: `v4.public.<b64url(message||signature)>.<b64url(footer)>`,
 signature over `PAE(["v4.public.", message, footer, implicit])`, footer
@@ -181,6 +196,19 @@ application is accepted by another.
 bounded, already-loaded map. Refetch on an unknown kid at most once per
 interval; a stream of garbage kids must not become a stream of outbound
 requests.
+
+Two clocks govern that cache, and only one of them is the kid budget:
+
+| | Bounds | Consequence of omitting it |
+| :--- | :--- | :--- |
+| TTL | how stale the document may get | a cache that refetches **only** on an unknown kid never sees a key removed — rotation works, revocation silently does not |
+| min-refetch | fetches an unknown kid may provoke | a stream of garbage kids becomes a stream of outbound requests |
+
+Fetches must be single-flight, and must not hold a lock that the cache-hit path
+also needs: a slow keys endpoint should cost one request its latency, not stall
+every concurrent verification behind it. A failed fetch leaves the previous
+document in place — stale keys beat no keys, and the unknown-kid rejection
+still stands.
 
 Claims:
 

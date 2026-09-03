@@ -2,11 +2,11 @@ package io.github.gsoultan.anubis;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.net.URI;
 import java.net.http.HttpClient;
 import java.security.PublicKey;
 import java.time.Duration;
 import java.util.Locale;
-import java.util.Map;
 
 /**
  * Verifies v4.public access tokens offline.
@@ -49,7 +49,10 @@ public final class Verifier {
         HttpClient http = b.http == null
             ? HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build()
             : b.http;
-        this.keys = new Keys(b.keysUrl == null ? "" : b.keysUrl, http, this.json, Duration.ofSeconds(30));
+        if (b.keysUrl != null) {
+            assertFetchableKeysUrl(b.keysUrl);
+        }
+        this.keys = new Keys(b.keysUrl == null ? "" : b.keysUrl, http, this.json, this.issuer);
         if (b.staticKeys != null) {
             this.keys.pin(Keys.parseDocument(b.staticKeys));
         }
@@ -78,7 +81,11 @@ public final class Verifier {
                 throw new VerificationException("anubis: token footer is not JSON");
             }
         }
-        PublicKey key = keys.get(kid);
+        // One instant for the whole verification: a key inside its window and a
+        // token inside its lifetime must be judged against the same reading.
+        long now = clock.instant().getEpochSecond();
+
+        PublicKey key = keys.get(kid, now);
         Paseto.Parsed verified = Paseto.verify(key, token, null);
 
         Claims claims;
@@ -90,12 +97,11 @@ public final class Verifier {
         if (claims.version() != 0 && claims.version() != 1) {
             throw new VerificationException("anubis: unsupported token version");
         }
-        validate(claims);
+        validate(claims, now);
         return claims;
     }
 
-    private void validate(Claims c) {
-        long now = clock.instant().getEpochSecond();
+    private void validate(Claims c, long now) {
         long l = leeway.toSeconds();
         if (c.expires() != 0 && now > c.expires() + l) {
             throw new VerificationException("anubis: token expired");
@@ -153,6 +159,10 @@ public final class Verifier {
             return this;
         }
 
+        /**
+         * The discovery endpoint. Must be https unless it points at loopback:
+         * whoever answers this URL decides which keys this verifier trusts.
+         */
         public Builder keysUrl(String v) {
             this.keysUrl = v;
             return this;
@@ -190,8 +200,46 @@ public final class Verifier {
         }
     }
 
-    /** Convenience for pinning keys from a parsed map. */
-    void pinKeys(Map<String, PublicKey> pinned) {
+    /** Convenience for pinning an already-parsed key set. */
+    void pinKeys(Keys.KeySet pinned) {
         keys.pin(pinned);
+    }
+
+    /**
+     * Refuses a keys endpoint that is not integrity-protected. Whoever answers
+     * this URL decides which public keys the verifier trusts, and therefore who
+     * can mint tokens it accepts — over plaintext that is anyone on the path.
+     * Loopback is exempt: it never leaves the host, and test servers live there.
+     */
+    static void assertFetchableKeysUrl(String raw) {
+        URI u;
+        try {
+            u = URI.create(raw);
+        } catch (IllegalArgumentException e) {
+            throw new VerificationException("anubis: keysUrl \"" + raw + "\" is not a URL");
+        }
+        String scheme = u.getScheme() == null ? "" : u.getScheme().toLowerCase(Locale.ROOT);
+        if (scheme.equals("https")) {
+            return;
+        }
+        if (!scheme.equals("http")) {
+            throw new VerificationException("anubis: keysUrl \"" + raw + "\": scheme must be https");
+        }
+        if (isLoopback(u.getHost())) {
+            return;
+        }
+        throw new VerificationException("anubis: keysUrl \"" + raw
+            + "\" is plaintext http — whoever answers it decides which keys "
+            + "this verifier trusts; use https");
+    }
+
+    private static boolean isLoopback(String host) {
+        if (host == null) {
+            return false;
+        }
+        String h = host.startsWith("[") && host.endsWith("]")
+            ? host.substring(1, host.length() - 1)
+            : host;
+        return h.equals("localhost") || h.equals("::1") || h.startsWith("127.");
     }
 }

@@ -20,6 +20,9 @@ final class Verifier
      * @param string $audience This service's identifier. Mandatory: a verifier
      *   without an audience accepts tokens minted for other services — the
      *   classic confused deputy. There is no flag to skip this check.
+     * @param string|null $keysUrl The discovery endpoint. Must be https unless
+     *   it points at loopback: whoever answers this URL decides which keys this
+     *   verifier trusts, and therefore who can mint tokens it accepts.
      * @param array<string, mixed>|null $staticKeys Pin keys directly, for
      *   air-gapped consumers and tests.
      * @param int $leewaySeconds Absorbs clock skew between services. Enforce NTP anyway.
@@ -40,7 +43,10 @@ final class Verifier
         if ($keysUrl === null && $staticKeys === null) {
             throw new VerificationException('anubis: either a keys url or static keys is required');
         }
-        $this->keys = new Keys($keysUrl ?? '');
+        if ($keysUrl !== null) {
+            self::assertFetchableKeysUrl($keysUrl);
+        }
+        $this->keys = new Keys($keysUrl ?? '', $issuer);
         if ($staticKeys !== null) {
             $this->keys->pin(Keys::parseDocument($staticKeys));
         }
@@ -67,7 +73,11 @@ final class Verifier
             }
             $kid = (string) ($footer['kid'] ?? '');
         }
-        $verified = Paseto::verify($this->keys->get($kid), $token);
+        // One instant for the whole verification: a key inside its window and a
+        // token inside its lifetime must be judged against the same reading.
+        $now = ($this->now)();
+
+        $verified = Paseto::verify($this->keys->get($kid, $now), $token);
 
         $decoded = json_decode($verified['message'], true);
         if (!is_array($decoded)) {
@@ -77,14 +87,13 @@ final class Verifier
         if ($claims->version !== 0 && $claims->version !== 1) {
             throw new VerificationException('anubis: unsupported token version');
         }
-        $this->validate($claims);
+        $this->validate($claims, $now);
 
         return $claims;
     }
 
-    private function validate(Claims $c): void
+    private function validate(Claims $c, int $now): void
     {
-        $now = ($this->now)();
         if ($c->expires !== 0 && $now > $c->expires + $this->leewaySeconds) {
             throw new VerificationException('anubis: token expired');
         }
@@ -97,6 +106,42 @@ final class Verifier
         if (!in_array($this->audience, $c->audience, true)) {
             throw new VerificationException('anubis: audience mismatch');
         }
+    }
+
+    /**
+     * Refuses a keys endpoint that is not integrity-protected. Whoever answers
+     * this URL decides which public keys the verifier trusts, and therefore who
+     * can mint tokens it accepts — over plaintext that is anyone on the path.
+     * Loopback is exempt: it never leaves the host, and test servers live there.
+     */
+    public static function assertFetchableKeysUrl(string $raw): void
+    {
+        $parts = parse_url($raw);
+        if ($parts === false || !isset($parts['scheme'])) {
+            throw new VerificationException(sprintf('anubis: keys url "%s" is not a URL', $raw));
+        }
+        $scheme = strtolower((string) $parts['scheme']);
+        if ($scheme === 'https') {
+            return;
+        }
+        if ($scheme !== 'http') {
+            throw new VerificationException(sprintf('anubis: keys url "%s": scheme must be https', $raw));
+        }
+        if (self::isLoopback((string) ($parts['host'] ?? ''))) {
+            return;
+        }
+        throw new VerificationException(sprintf(
+            'anubis: keys url "%s" is plaintext http — whoever answers it decides which keys '
+            . 'this verifier trusts; use https',
+            $raw
+        ));
+    }
+
+    private static function isLoopback(string $host): bool
+    {
+        $h = trim($host, '[]');
+
+        return $h === 'localhost' || $h === '::1' || str_starts_with($h, '127.');
     }
 
     /** Extracts the Authorization bearer credential. */

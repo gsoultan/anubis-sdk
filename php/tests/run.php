@@ -24,6 +24,7 @@ use Anubis\AuthMethods;
 use Anubis\Claims;
 use Anubis\Client;
 use Anubis\Identity;
+use Anubis\Keys;
 use Anubis\Permission;
 use Anubis\Permissions;
 use Anubis\Role;
@@ -540,6 +541,266 @@ check('tokens expose lifetime, expiry and whether they can rotate', static funct
     assertSame($issued + 600, $t->expiresAt()?->getTimestamp(), 'expiresAt');
     // A client-credentials pair has no refresh token; it is re-minted instead.
     assertTrue(!(new \Anubis\Tokens(accessToken: 'a'))->hasRefresh(), 'no refresh');
+});
+
+
+// ---- keys: the document, its windows, and the cache -----------------------
+
+echo "keys\n";
+
+$newKey = static function (string $kid, array $extra = []): array {
+    $pk = sodium_crypto_sign_publickey(sodium_crypto_sign_keypair());
+
+    return array_merge(['kid' => $kid, 'alg' => 'Ed25519', 'public_key' => Paseto::b64urlEncode($pk)], $extra);
+};
+
+$keysDoc = static function (string $issuer, array ...$keys): string {
+    $d = ['keys' => $keys];
+    if ($issuer !== '') {
+        $d['issuer'] = $issuer;
+    }
+
+    return json_encode($d, JSON_THROW_ON_ERROR);
+};
+
+/** A keys endpoint the tests can swap, count and take down. Still no dependencies: it is this same php binary. */
+final class KeysServer
+{
+    public readonly string $url;
+    private readonly string $dir;
+    /** @var resource|false */
+    private $proc;
+
+    public function __construct(string $body)
+    {
+        $this->dir = sys_get_temp_dir() . '/anubis-keys-' . bin2hex(random_bytes(6));
+        if (!mkdir($this->dir) && !is_dir($this->dir)) {
+            throw new \RuntimeException('cannot create ' . $this->dir);
+        }
+        file_put_contents($this->dir . '/router.php', <<<'ROUTER'
+<?php
+$d = __DIR__;
+file_put_contents($d . '/hits', (string) (((int) @file_get_contents($d . '/hits')) + 1));
+http_response_code((int) (@file_get_contents($d . '/status') ?: 200));
+echo (string) @file_get_contents($d . '/body');
+ROUTER);
+        $this->serve($body, 200);
+
+        $sock = stream_socket_server('tcp://127.0.0.1:0', $errno, $errstr);
+        if ($sock === false) {
+            throw new \RuntimeException("cannot reserve a port: {$errstr}");
+        }
+        $name = (string) stream_socket_get_name($sock, false);
+        $port = (int) substr($name, (int) strrpos($name, ':') + 1);
+        fclose($sock);
+
+        $pipes = [];
+        $this->proc = proc_open(
+            sprintf(
+                'exec %s -S 127.0.0.1:%d %s',
+                escapeshellarg(PHP_BINARY),
+                $port,
+                escapeshellarg($this->dir . '/router.php')
+            ),
+            [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']],
+            $pipes
+        );
+        $this->url = "http://127.0.0.1:{$port}/keys.json";
+
+        for ($i = 0; $i < 200; $i++) {
+            $probe = @fsockopen('127.0.0.1', $port, $errno, $errstr, 0.1);
+            if ($probe !== false) {
+                fclose($probe);
+                file_put_contents($this->dir . '/hits', '0');
+
+                return;
+            }
+            usleep(25000);
+        }
+        $this->close();
+        throw new \RuntimeException('the keys server did not start');
+    }
+
+    public function serve(string $body, int $status): void
+    {
+        file_put_contents($this->dir . '/body', $body);
+        file_put_contents($this->dir . '/status', (string) $status);
+    }
+
+    public function hits(): int
+    {
+        return (int) @file_get_contents($this->dir . '/hits');
+    }
+
+    public function close(): void
+    {
+        if (is_resource($this->proc)) {
+            proc_terminate($this->proc);
+            proc_close($this->proc);
+        }
+        array_map('unlink', (array) glob($this->dir . '/*'));
+        @rmdir($this->dir);
+    }
+}
+
+check('the keys document is bound to an issuer', static function () use ($newKey): void {
+    $k = $newKey('k1');
+    Keys::parseDocument(['issuer' => 'https://a.test', 'keys' => [$k]], 'https://a.test');
+    Keys::parseDocument(['keys' => [$k]], 'https://a.test');                     // omitted: nothing to bind
+    Keys::parseDocument(['issuer' => 'https://evil.test', 'keys' => [$k]], '');  // caller did not bind
+    $e = assertThrows(VerificationException::class, static fn () => Keys::parseDocument(
+        ['issuer' => 'https://evil.test', 'keys' => [$k]],
+        'https://a.test'
+    ));
+    assertTrue(str_contains($e->getMessage(), 'issued by'), $e->getMessage());
+});
+
+check('the key count is bounded', static function () use ($newKey): void {
+    $keys = [];
+    for ($i = 0; $i < 65; $i++) {
+        $keys[] = $newKey("k{$i}");
+    }
+    assertThrows(VerificationException::class, static fn () => Keys::parseDocument(['keys' => $keys]));
+});
+
+check('the algorithm is pinned', static function () use ($newKey, $publicKey): void {
+    $parsed = Keys::parseDocument(['keys' => [
+        ['kid' => 'k1', 'alg' => 'Ed25519', 'public_key' => Paseto::b64urlEncode($publicKey)],
+        $newKey('k2', ['alg' => 'RS256']),
+    ]]);
+    assertTrue(isset($parsed['k1']), 'kept the Ed25519 key');
+    assertTrue(!isset($parsed['k2']), 'dropped the non-Ed25519 key');
+});
+
+check('a key past its not_after stops verifying tokens', static function () use ($mint, $publicKey): void {
+    $doc = ['issuer' => ISSUER, 'keys' => [[
+        'kid' => 'k1',
+        'alg' => 'Ed25519',
+        'public_key' => Paseto::b64urlEncode($publicKey),
+        'not_after' => time() - 60,
+    ]]];
+    $v = new Verifier(issuer: ISSUER, audience: APP, staticKeys: $doc);
+    // The token itself is entirely valid; only the key has been retired.
+    $e = assertThrows(VerificationException::class, static fn () => $v->verify($mint(['sub' => 'usr_1'])));
+    assertTrue(str_contains($e->getMessage(), 'unknown kid'), $e->getMessage());
+});
+
+check('a key before its not_before does not verify yet', static function () use ($mint, $publicKey): void {
+    $doc = ['keys' => [[
+        'kid' => 'k1',
+        'alg' => 'Ed25519',
+        'public_key' => Paseto::b64urlEncode($publicKey),
+        'not_before' => time() + 3600,
+    ]]];
+    $v = new Verifier(issuer: ISSUER, audience: APP, staticKeys: $doc);
+    assertThrows(VerificationException::class, static fn () => $v->verify($mint(['sub' => 'usr_1'])));
+});
+
+// The gap this closes: a cache that refetches only on an unknown kid never
+// notices a key being withdrawn, so a compromised key keeps verifying tokens
+// for the lifetime of the process.
+check('revocation propagates once the document goes stale', static function () use ($newKey, $keysDoc): void {
+    $k1 = $newKey('k1');
+    $k2 = $newKey('k2');
+    $srv = new KeysServer($keysDoc('', $k1, $k2));
+    try {
+        $keys = new Keys($srv->url);
+        $now = 1700000000;
+        $keys->get('k2', $now);
+
+        $srv->serve($keysDoc('', $k1), 200); // k2 withdrawn
+
+        $keys->get('k2', $now + 60); // inside the TTL the cached document answers
+        assertThrows(VerificationException::class, static fn () => $keys->get('k2', $now + 360));
+    } finally {
+        $srv->close();
+    }
+});
+
+check('an unknown kid cannot become a stream of requests', static function () use ($newKey, $keysDoc): void {
+    $srv = new KeysServer($keysDoc('', $newKey('k1')));
+    try {
+        $keys = new Keys($srv->url);
+        $now = 1700000000;
+        for ($i = 0; $i < 50; $i++) {
+            assertThrows(VerificationException::class, static fn () => $keys->get('garbage', $now));
+        }
+        assertSame(1, $srv->hits(), '50 garbage kids');
+        assertThrows(VerificationException::class, static fn () => $keys->get('garbage', $now + 31));
+        assertSame(2, $srv->hits(), 'past the min-refetch floor');
+    } finally {
+        $srv->close();
+    }
+});
+
+check('stale keys beat no keys', static function () use ($newKey, $keysDoc): void {
+    $srv = new KeysServer($keysDoc('', $newKey('k1')));
+    try {
+        $keys = new Keys($srv->url);
+        $now = 1700000000;
+        $keys->get('k1', $now);
+        $srv->serve('', 500);
+        $keys->get('k1', $now + 360); // stale document, endpoint down
+    } finally {
+        $srv->close();
+    }
+});
+
+// Until the first fetch lands nothing verifies, but a down endpoint must still
+// not take one outbound request per inbound request.
+check('a failing bootstrap is rate limited', static function () use ($keysDoc, $newKey): void {
+    $srv = new KeysServer($keysDoc('', $newKey('k1')));
+    try {
+        $srv->serve('', 500);
+        $keys = new Keys($srv->url);
+        $now = 1700000000;
+        for ($i = 0; $i < 20; $i++) {
+            assertThrows(VerificationException::class, static fn () => $keys->get('k1', $now));
+        }
+        assertSame(1, $srv->hits(), '20 requests against a down endpoint');
+        assertThrows(VerificationException::class, static fn () => $keys->get('k1', $now + 2));
+        assertSame(2, $srv->hits(), 'past the retry floor');
+    } finally {
+        $srv->close();
+    }
+});
+
+check('a document from another deployment is refused', static function () use ($newKey, $keysDoc): void {
+    $srv = new KeysServer($keysDoc('https://staging.test', $newKey('k1')));
+    try {
+        $keys = new Keys($srv->url, 'https://prod.test');
+        $e = assertThrows(VerificationException::class, static fn () => $keys->get('k1', 1700000000));
+        assertTrue(str_contains($e->getMessage(), 'issued by'), $e->getMessage());
+    } finally {
+        $srv->close();
+    }
+});
+
+check('a keys url must be integrity-protected', static function (): void {
+    foreach ([
+        'https://anubis.internal/.well-known/anubis-keys.json',
+        'http://127.0.0.1:8080/keys.json',
+        'http://[::1]:8080/keys.json',
+        'http://localhost:8080/keys.json',
+    ] as $ok) {
+        Verifier::assertFetchableKeysUrl($ok);
+    }
+    foreach ([
+        'http://anubis.internal/keys.json',
+        'http://10.0.0.7/keys.json',
+        'file:///etc/anubis/keys.json',
+    ] as $bad) {
+        assertThrows(VerificationException::class, static fn () => Verifier::assertFetchableKeysUrl($bad));
+    }
+});
+
+check('the verifier refuses to be built on plaintext', static function (): void {
+    $e = assertThrows(VerificationException::class, static fn () => new Verifier(
+        issuer: ISSUER,
+        audience: APP,
+        keysUrl: 'http://anubis.test/keys.json',
+    ));
+    assertTrue(str_contains($e->getMessage(), 'plaintext http'), $e->getMessage());
 });
 
 echo "\n{$passed} passed, {$failed} failed\n";

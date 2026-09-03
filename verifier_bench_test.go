@@ -23,7 +23,7 @@ func BenchmarkVerify(b *testing.B) {
 		Kid: "k1", Alg: "Ed25519",
 		PublicKey: base64.RawURLEncoding.EncodeToString(pk),
 	}}})
-	set, err := keys.ParseDocument(doc)
+	set, err := keys.ParseDocument(doc, "")
 	if err != nil {
 		b.Fatal(err)
 	}

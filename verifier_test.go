@@ -23,7 +23,7 @@ func testKeys(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey, *keys.Set) {
 		Kid: "k1", Alg: "Ed25519",
 		PublicKey: base64.RawURLEncoding.EncodeToString(pk),
 	}}})
-	ks, err := keys.ParseDocument(doc)
+	ks, err := keys.ParseDocument(doc, "")
 	if err != nil {
 		t.Fatal(err)
 	}

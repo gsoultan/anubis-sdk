@@ -1,6 +1,6 @@
 import type { KeyObject } from "node:crypto";
 import { parse, verify as pasetoVerify } from "./paseto.js";
-import { KeyCache, parseKeyDocument, type KeysDocument } from "./keys.js";
+import { KeyCache, KeySet, parseKeyDocument, type KeysDocument } from "./keys.js";
 import { VerificationError } from "./errors.js";
 import { AuthMethods, Identity, Roles, Scopes, toDate } from "./identity.js";
 
@@ -114,6 +114,11 @@ export interface VerifierConfig {
    * accepts tokens minted for other services — the confused deputy.
    */
   audience: string;
+  /**
+   * The discovery endpoint. Must be https unless it points at loopback:
+   * whoever answers this URL decides which keys this verifier trusts, and
+   * therefore who can mint tokens it accepts.
+   */
   keysUrl?: string;
   /** Pin keys directly, for air-gapped consumers and tests. */
   staticKeys?: KeysDocument;
@@ -131,7 +136,7 @@ export interface VerifierConfig {
  */
 export class Verifier {
   readonly #cache?: KeyCache;
-  readonly #static?: Map<string, KeyObject>;
+  readonly #static?: KeySet;
   readonly #leeway: number;
   readonly #now: () => number;
 
@@ -145,7 +150,10 @@ export class Verifier {
       throw new VerificationError("anubis: either keysUrl or staticKeys is required");
     }
     if (cfg.staticKeys) this.#static = parseKeyDocument(cfg.staticKeys);
-    if (cfg.keysUrl) this.#cache = new KeyCache(cfg.keysUrl, 30_000, cfg.fetchImpl ?? fetch);
+    if (cfg.keysUrl) {
+      assertFetchableKeysUrl(cfg.keysUrl);
+      this.#cache = new KeyCache(cfg.keysUrl, { issuer: cfg.issuer, fetchImpl: cfg.fetchImpl });
+    }
     this.#leeway = cfg.leewaySeconds ?? 60;
     this.#now = cfg.now ?? (() => Math.floor(Date.now() / 1000));
   }
@@ -169,19 +177,21 @@ export class Verifier {
         throw new VerificationError("anubis: token footer is not JSON");
       }
     }
-    const key = await this.#key(kid);
+    // One instant for the whole verification: a key inside its window and a
+    // token inside its lifetime must be judged against the same clock reading.
+    const now = this.#now();
+    const key = await this.#key(kid, now);
     const { message } = pasetoVerify(key, token);
 
     const claims = JSON.parse(message.toString("utf8")) as Claims;
     if (claims.ver !== undefined && claims.ver !== 0 && claims.ver !== 1) {
       throw new VerificationError("anubis: unsupported token version");
     }
-    this.#validate(claims);
+    this.#validate(claims, now);
     return claims;
   }
 
-  #validate(c: Claims): void {
-    const now = this.#now();
+  #validate(c: Claims, now: number): void {
     if (c.exp && now > c.exp + this.#leeway) throw new VerificationError("anubis: token expired");
     if (c.nbf && now < c.nbf - this.#leeway) {
       throw new VerificationError("anubis: token not yet valid (check NTP)");
@@ -193,11 +203,11 @@ export class Verifier {
     if (!aud.includes(this.cfg.audience)) throw new VerificationError("anubis: audience mismatch");
   }
 
-  async #key(kid: string): Promise<KeyObject> {
-    const pinned = this.#static?.get(kid);
+  async #key(kid: string, now: number): Promise<KeyObject> {
+    const pinned = this.#static?.get(kid, now);
     if (pinned) return pinned;
     if (!this.#cache) throw new VerificationError(`anubis: unknown kid ${JSON.stringify(kid)}`);
-    return this.#cache.get(kid);
+    return this.#cache.get(kid, now);
   }
 
   /** Extracts the Authorization bearer credential from a header value. */
@@ -207,4 +217,33 @@ export class Verifier {
     if (!scheme || scheme.toLowerCase() !== "bearer" || rest.length === 0) return null;
     return rest.join(" ");
   }
+}
+
+/**
+ * Refuses a keys endpoint that is not integrity-protected. Whoever answers
+ * this URL decides which public keys the verifier trusts, and therefore who
+ * can mint tokens it accepts — over plaintext that is anyone on the path.
+ * Loopback is exempt: it never leaves the host, and test servers live there.
+ */
+export function assertFetchableKeysUrl(raw: string): void {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new VerificationError(`anubis: keysUrl ${JSON.stringify(raw)} is not a URL`);
+  }
+  if (url.protocol === "https:") return;
+  if (url.protocol === "http:" && isLoopback(url.hostname)) return;
+  if (url.protocol !== "http:") {
+    throw new VerificationError(`anubis: keysUrl ${JSON.stringify(raw)}: scheme must be https`);
+  }
+  throw new VerificationError(
+    `anubis: keysUrl ${JSON.stringify(raw)} is plaintext http — whoever answers it ` +
+      "decides which keys this verifier trusts; use https",
+  );
+}
+
+function isLoopback(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, "");
+  return host === "localhost" || host === "::1" || /^127\./.test(host);
 }
