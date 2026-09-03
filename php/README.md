@@ -99,7 +99,7 @@ back-channel half.
 
 ## The rest
 
-This package is one of four — Go, PHP, Java and Node — built from
+This package is one of two — Go and PHP — built from
 [gsoultan/anubis-sdk](https://github.com/gsoultan/anubis-sdk) against one
 normative contract, [`docs/WIRE.md`](https://github.com/gsoultan/anubis-sdk/blob/main/docs/WIRE.md).
 Read that if you would rather POST the JSON yourself.

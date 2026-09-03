@@ -6,9 +6,9 @@
 #   scripts/release/php-split.sh v0.1.0 --push   and publish the mirror
 #
 # Packagist reads composer.json from a repository root, and this repository
-# keeps it in php/. There is no per-directory support the way npm's
-# repository.directory field allows, so a monorepo publishes to Packagist the
-# way Symfony does: from a derived repository containing only that subtree.
+# keeps it in php/. There is no way to point it at a subdirectory, so a
+# monorepo publishes to Packagist the way Symfony does: from a derived
+# repository containing only that subtree.
 #
 # composer.json's psr-4 map is already relative to php/, so nothing inside it
 # changes when the subtree becomes a root. That is why this is a split and not

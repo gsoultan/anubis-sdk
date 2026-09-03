@@ -1,7 +1,7 @@
 # Changelog
 
-The four language packages are versioned together: one version number means
-the same wire contract in Go, Node, PHP and Java. Format follows
+Both language packages are versioned together: one version number means the
+same wire contract in Go and PHP. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html), and while the major
 version is 0 the API may still move.
@@ -32,7 +32,7 @@ First release.
   source.
 - **Sign-out**, including receiving back-channel logout.
 - **Client credentials**, for when no user is present.
-- **Typed refusals** in all four languages — denied, step-up required,
+- **Typed refusals** in both languages — denied, step-up required,
   enrolment required, refresh reuse, state mismatch, rate limited,
   unavailable, verification failure — because each has a different correct
   response.
@@ -48,17 +48,21 @@ First release.
 
 ### Published
 
-Go (`github.com/gsoultan/anubis-sdk`), Node (`@gsoultan/anubis-sdk`) and PHP
-(`gsoultan/anubis-sdk`, from the read-only mirror that
-`scripts/release/php-split.sh` produces — Packagist reads `composer.json` only
-from a repository root, and this one lives in `php/`).
-
-Java is built and tested from this tag but is not on Maven Central yet:
-Sonatype namespace verification and artefact signing are their own piece of
-work. Until then, `mvn install` in `java/`.
+Go (`github.com/gsoultan/anubis-sdk`) and PHP (`gsoultan/anubis-sdk`, from the
+read-only mirror that `scripts/release/php-split.sh` produces — Packagist reads
+`composer.json` only from a repository root, and this one lives in `php/`).
 
 `anubiskit` is deliberately untagged. Its `replace` directives are ignored by
 downstream modules, so `require github.com/gsoultan/anubis-sdk v0.0.0` would
 fail to resolve for anyone consuming it.
+
+### Not shipped
+
+Node and Java clients were written, tested and then removed before this
+release. Neither was ever published, so there is nothing on npm or Maven
+Central to deprecate; they are in the history at `3443a1d`. Applications in
+those languages go against [`docs/WIRE.md`](docs/WIRE.md), which is normative
+and was always the contract the clients were written to — the SDKs were a
+convenience, not the interface.
 
 [0.1.0]: https://github.com/gsoultan/anubis-sdk/releases/tag/v0.1.0

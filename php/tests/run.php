@@ -237,7 +237,7 @@ $principal = new Principal(
 
 echo "paseto\n";
 check('PAE matches the specification vectors', static function (): void {
-    // The same golden table the Go and TypeScript implementations assert.
+    // The same golden table the Go implementation asserts.
     // Drift here is a cross-implementation token break.
     assertSame('0000000000000000', bin2hex(Paseto::pae([])), 'empty list');
     assertSame('01000000000000000000000000000000', bin2hex(Paseto::pae([''])), 'one empty string');

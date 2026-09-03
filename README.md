@@ -1,31 +1,38 @@
 # anubis-sdk
 
 Clients for integrating an application with an [Anubis](https://github.com/gsoultan/anubis)
-identity service, in Go, PHP, Java and Node.
+identity service, in Go and PHP.
 
-All four are the same small library in four languages: **verify offline, ask
-before you act**, typed refusals you can branch on, and a refusal to let you
-skip the checks that matter. None of them depends on the server's source — they
-speak [the wire contract](docs/WIRE.md), which is also what you want if you
-would rather POST JSON yourself.
+Both are the same small library in two languages: **verify offline, ask before
+you act**, typed refusals you can branch on, and a refusal to let you skip the
+checks that matter. Neither depends on the server's source — they speak
+[the wire contract](docs/WIRE.md).
 
 | Language | Package | Install | Runtime deps |
 | --- | --- | --- | --- |
 | **Go** | `github.com/gsoultan/anubis-sdk` | `go get github.com/gsoultan/anubis-sdk` | none — stdlib only |
 | **PHP** | `gsoultan/anubis-sdk` | `composer require gsoultan/anubis-sdk` | ext-curl, ext-json, ext-sodium |
-| **Java** | `io.github.gsoultan:anubis-sdk` | Maven / Gradle | jackson-databind (JSON only) |
-| **Node** | `@gsoultan/anubis-sdk` | `npm i @gsoultan/anubis-sdk` | none — `fetch` + `node:crypto` |
 
-As of `v0.1.0` the Go, Node and PHP rows work as written. PHP publishes from a
-read-only mirror, because Packagist reads `composer.json` only from a
-repository root and this one lives in `php/`. Java is built and tested from
-the same tag but is not on Maven Central yet; until it is, clone and run
-`mvn install` in `java/`. `anubiskit` is deliberately untagged — see
-[CHANGELOG.md](CHANGELOG.md).
+PHP publishes from a read-only mirror, because Packagist reads `composer.json`
+only from a repository root and this one lives in `php/`. `anubiskit` is
+deliberately untagged — see [CHANGELOG.md](CHANGELOG.md).
 
-No third-party cryptography in any of them: Ed25519 comes from `crypto/ed25519`,
-`node:crypto`, ext-sodium and the JDK respectively. PASETO `v4.public` is a
-format, and formats are written here; primitives are not.
+No third-party cryptography in either: Ed25519 comes from `crypto/ed25519` and
+ext-sodium. PASETO `v4.public` is a format, and formats are written here;
+primitives are not.
+
+## Any other language
+
+There is no client library for your language here, and you do not need one.
+Everything an SDK does is HTTP against a documented contract:
+[**`docs/WIRE.md`**](docs/WIRE.md) is normative — routes, the two JSON naming
+conventions and the seam between them, the claim set, the keys document, the
+error envelope. It is written to be implemented against, and anything in it
+can be spoken with `curl`.
+
+Read [Four things worth knowing before you ship](#four-things-worth-knowing-before-you-ship)
+first. Those four are what a hand-written client most often gets wrong, and
+three of them are silent when they are wrong.
 
 ## The shape of an integration
 
@@ -108,36 +115,6 @@ go-kit's own `auth/jwt`: a `RequestFunc` lifts the credential inward and
 service and endpoint layers written once and shared by all three. It is a
 separate module so the root stays dependency-free.
 
-## Node
-
-```ts
-import { Verifier, Client, TokenSource, requireToken, requires, isStepUpRequired }
-  from "@gsoultan/anubis-sdk";
-
-const verifier = new Verifier({
-  issuer: "https://anubis.internal",
-  audience: "billing-api",
-  keysUrl: "https://anubis.internal/.well-known/anubis-keys.json",
-});
-app.use(requireToken(verifier));                       // sets req.anubis
-
-app.post("/invoices/:id/approve",
-  requires(client, "billing:invoice:approve", (req) => ({ org: req.params.org })),
-  handler);
-
-// or by hand
-try {
-  await client.require(req.anubis, "billing:invoice:approve", { org, customer });
-} catch (e) {
-  if (isStepUpRequired(e)) {
-    const redirect = client.beginStepUp(e, { redirectUri: cb });
-    res.setHeader("Set-Cookie", redirect.cookie);
-    return res.redirect(redirect.url);
-  }
-  throw e;
-}
-```
-
 ## PHP
 
 ```php
@@ -167,27 +144,6 @@ try {
 }
 ```
 
-## Java
-
-```java
-var verifier = Verifier.builder()
-    .issuer("https://anubis.internal")
-    .audience("billing-api")
-    .keysUrl("https://anubis.internal/.well-known/anubis-keys.json")
-    .build();
-
-Principal principal = verifier.principal(request.getHeader("Authorization"));
-
-try {
-    client.require(principal, "billing:invoice:approve",
-        Scopes.of("org", orgId, "customer", customerId));
-} catch (StepUpRequiredException e) {
-    var redirect = client.beginStepUp(e, new Client.LoginParams(callbackUri));
-    response.addHeader("Set-Cookie", redirect.cookie());
-    response.sendRedirect(redirect.url());
-}
-```
-
 ## Four things worth knowing before you ship
 
 **The audience check is not optional.** A verifier without one accepts tokens
@@ -204,9 +160,11 @@ is really a client bug.
 rotate. Two concurrent handlers that both refresh will produce
 `refresh_token_reuse_detected`, which Anubis correctly reads as theft and
 answers by revoking the family and the session — your own users, logged out, by
-your own client. Use `TokenSource` (Go, Node, Java), which serialises refreshes
-behind a single flight. In PHP the contention is between *processes*, which no
-in-process lock can fix: take a lock in whatever your sessions already share.
+your own client. In Go use `TokenSource`, which serialises refreshes behind a
+single flight. In PHP the contention is between *processes*, which no
+in-process lock can fix: take a lock in whatever your sessions already share —
+and that is the shape of the problem in any language whose runtime is
+per-request, so a hand-written client needs the same lock.
 
 **Mount the back-channel logout receiver.** It is the half of sign-out
 applications skip, because it is the half they have to write themselves — and
@@ -222,7 +180,7 @@ admin/            grants, roles and scope nodes — operator credentials only
 anubistest/       an in-process Anubis for tests, integration plane and admin
 anubiskit/        go-kit adapter for HTTP, gRPC and AMQP — a SEPARATE module
 examples/         a worked browser application, end-to-end tested
-node/ php/ java/  the other three, each self-contained
+php/              the PHP client, self-contained, published from a split mirror
 proto/anubis/v1/  the vendored contract, the single source for codegen
 docs/WIRE.md      the contract in prose, for people not using an SDK
 docs/MIGRATION.md pkg/anubis → anubis-sdk, and the dependency inversion
@@ -231,9 +189,9 @@ DESIGN.md         why the SDK is shaped this way
 
 ## The vocabulary
 
-None of these is a `string`, a `string[]` or a map, in any of the four
-languages. Each was, once, and each was a place to pass the right shape with
-the wrong meaning:
+None of these is a `string`, a `string[]` or a map, in either language. Each
+was, once, and each was a place to pass the right shape with the wrong
+meaning:
 
 | Type | What it knows | The mistake it makes visible |
 | :--- | :--- | :--- |
@@ -267,23 +225,20 @@ site to prevent nothing.
 
 ## Status
 
-All four languages are implemented and tested — offline verification, PKCE
+Both languages are implemented and tested — offline verification, PKCE
 sign-in, decisions with step-up, rotation with reuse detection, back-channel
 logout, client credentials:
 
 | | Tests | Runner |
 | :--- | ---: | :--- |
-| Go | 53 + 14 (`admin`) + 21 (`anubiskit`) | `go test -race ./...` |
-| Node | 30 | `bun test src` |
-| PHP | 27 | `php tests/run.php` |
-| Java | 21 | `mvn test` |
+| Go | 79 (root, `keys`, `paseto`, `admin`, examples) + 21 (`anubiskit`) | `go test -race ./...` |
+| PHP | 39 | `php tests/run.php` |
 
-Four languages and two Go modules is more than anyone should hold in their
-head, so there is one command:
+Two languages and two Go modules, one command:
 
 ```bash
 scripts/ci/local.sh              # everything this machine can run
-scripts/ci/local.sh go node      # or just the ones you touched
+scripts/ci/local.sh go           # or just the one you touched
 ```
 
 A missing toolchain is reported as **SKIP** and exits non-zero. A green tick
@@ -292,8 +247,13 @@ that only means "php was not installed" is worse than no suite at all.
 own job so that branch cannot be taken in CI, and asserts one thing the tests
 cannot: that the root `go.mod` still has no `require` block.
 
-The three PASETO implementations assert the same PAE golden vectors, so token
-handling is pinned across languages byte for byte.
+Both PASETO implementations assert the same PAE golden vectors from the
+specification, so token handling is pinned byte for byte — and those vectors
+are the thing to check a hand-written client against too.
+
+Node and Java clients were built and then removed before the first release;
+they are in the history at `3443a1d` if they are ever wanted back. Applications
+in those languages go against [`docs/WIRE.md`](docs/WIRE.md) directly.
 
 ## Entitlement is a different question, and a different credential
 

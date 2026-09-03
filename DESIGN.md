@@ -1,7 +1,7 @@
 # anubis-sdk — API design
 
 Clients for integrating an application with an [Anubis](https://github.com/gsoultan/anubis)
-installation, in Go, PHP, Java and Node.
+installation, in Go and PHP.
 
 Anubis is a private repository. That single fact decides the shape of this SDK:
 an application can no longer `go get github.com/gsoultan/anubis-sdk`, so
@@ -40,16 +40,14 @@ imports the `Verifier` and never constructs a `Client`. That is the property
 worth protecting: **what every service embeds must not drag a dependency tree
 behind it.**
 
-All four languages can verify with no third-party crypto, which keeps
+Both languages can verify with no third-party crypto, which keeps
 [ADR-0002](https://github.com/gsoultan/anubis/blob/main/docs/adr/0002-dependency-policy.md)'s
 constraint intact on the client side too:
 
 | Language | Ed25519 from | Runtime deps |
 | :--- | :--- | :--- |
 | Go | `crypto/ed25519` | none — stdlib only |
-| Node | `node:crypto` + `fetch` | none |
 | PHP | `sodium_crypto_sign_verify_detached` (bundled since 7.2) | ext-sodium, ext-json |
-| Java | `EdDSA` (JDK 15+) | jackson-databind — the JDK ships no JSON parser, and verifying needs to read the claims |
 
 ## 2. What is in scope
 
@@ -394,7 +392,7 @@ production binaries.
 
 ## 4. Errors
 
-One taxonomy, four languages, mapped from the `ErrorInfo.code` the server puts
+One taxonomy, both languages, mapped from the `ErrorInfo.code` the server puts
 in the Connect error detail — the body is authoritative over the HTTP status,
 because a proxy is free to rewrite a status and some do.
 
@@ -413,12 +411,13 @@ because a proxy is free to rewrite a status and some do.
 Every error carries `RequestID`, which correlates to `audit_log` and traces —
 the first thing anyone asks for when an integration misbehaves.
 
-Idiomatic per language: `errors.As` in Go, exception subclasses in PHP and
-Java, a discriminated union on `error.code` in TypeScript.
+Idiomatic per language: `errors.As` in Go, exception subclasses in PHP. A
+client written by hand branches on `error.code`, which is the same information
+under a different spelling — see `docs/WIRE.md`.
 
 ---
 
-## 5. The other three languages
+## 5. The second language
 
 Same six capabilities, same names, idiomatic bindings.
 
@@ -446,49 +445,6 @@ try {
 Laravel gets a guard and a `Route::middleware('anubis:billing:invoice:approve')`
 so the common case is a route annotation.
 
-### Node — `fetch`, no dependencies
-
-```ts
-import { Verifier, Client, isStepUpRequired } from "@gsoultan/anubis-sdk";
-
-const verifier = new Verifier({
-  issuer: "https://anubis.internal",
-  audience: "billing-api",
-  keysUrl: "https://anubis.internal/.well-known/anubis-keys.json",
-});
-
-app.use(verifier.express());                      // also .fastify(), .fetch()
-
-try {
-  await client.require(req, "billing:invoice:approve", { org, customer });
-} catch (e) {
-  if (isStepUpRequired(e)) return res.redirect(client.stepUpUrl(e, callbackUri));
-  throw e;
-}
-```
-
-Types are generated from the proto and shipped in the package — the request and
-response shapes are the wire contract, and hand-maintaining them is how they
-drift.
-
-### Java — servlet filter, Spring Security provider
-
-```java
-var verifier = Verifier.builder()
-    .issuer("https://anubis.internal")
-    .audience("billing-api")
-    .keysUrl("https://anubis.internal/.well-known/anubis-keys.json")
-    .build();
-
-http.addFilterBefore(new AnubisFilter(verifier), AuthorizationFilter.class);
-
-try {
-    client.require("billing:invoice:approve", Scopes.of("org", orgId, "customer", custId));
-} catch (StepUpRequiredException e) {
-    return new RedirectView(client.stepUpUrl(e, callbackUri));
-}
-```
-
 ---
 
 ## 6. Repository layout
@@ -498,7 +454,7 @@ Mirrors `panmail-sdk`, so anyone who has seen one has seen both.
 ```
 anubis-sdk/
   DESIGN.md              this document
-  README.md              the four quick starts, one table of packages
+  README.md              the quick starts, one table of packages
   doc.go  verifier.go  claims.go  keys/  paseto/     # Go: offline half
   client.go  login.go  authz.go  tokensource.go      # Go: online half
   errors.go  options.go
@@ -507,7 +463,7 @@ anubis-sdk/
   anubiskit/             # separate module: go-kit over HTTP, gRPC and AMQP
   examples/billing-web/  # a worked browser application, end-to-end tested
   scripts/ci/local.sh    # every suite in one command
-  node/  php/  java/     # the other three, each self-contained
+  php/                   # the second binding, self-contained
   proto/anubis/v1/       # vendored contract, the single source for codegen
   docs/
     WIRE.md              the contract, for people not using an SDK
@@ -518,8 +474,9 @@ anubis-sdk/
 
 `proto/` is vendored here rather than fetched from the private server repo,
 which is the point: the contract is public even though the implementation is
-not. `scripts/gen.sh` regenerates the admin clients and the TypeScript types
-from it, so drift is a diff rather than a discovery.
+not, and it is what a client in any language is written against.
+`scripts/gen.sh` regenerates the admin clients from it, so drift is a diff
+rather than a discovery.
 
 ---
 
@@ -621,7 +578,7 @@ returning a string. It needs the ResponseWriter, exactly as `BeginLogin` does.
 **The primitives became a vocabulary.** §3 was written in `string`,
 `[]string` and `map[string]string`. Every one of those was a place to pass the
 right shape with the wrong meaning, so `Permission`, `Role`/`Roles`, `Axis`,
-`Scopes`, `AuthMethods` and `Identity` now exist in all four languages. Scope
+`Scopes`, `AuthMethods` and `Identity` now exist in both languages. Scope
 *values* stayed plain strings: they are the caller's own identifiers, and
 wrapping them would add a conversion at every call site to prevent nothing.
 
@@ -634,9 +591,16 @@ Anubis middleware is written once rather than three times.
 
 ## 9. Assumptions
 
-- **Four languages**, matching `panmail-sdk`: Go, PHP, Java, Node. Say if the
-  set differs — it changes the shape of the repository more than anything else
-  in this document.
+- **Four languages**, matching `panmail-sdk`: Go, PHP, Java, Node. *Did not
+  hold.* Node and Java were built, tested and then cut before the first
+  release: applications in those languages go against `docs/WIRE.md` directly.
+  This was the assumption most worth stating, because it did change the shape
+  of the repository more than anything else in this document — two of the four
+  CI jobs, the npm half of the release workflow, and the version-agreement
+  check that existed only because `package.json` and `pom.xml` carried a
+  version number, all went with them. What survived unchanged is the thing
+  that mattered: `docs/WIRE.md` is normative, so removing a binding removes a
+  convenience rather than an interface.
 - **Integration first, admin second.** Held: the six capabilities in §2 landed
-  first, `admin/` after. Admin is Go-only so far, which suits operator tooling;
-  the other three languages have the integration half only.
+  first, `admin/` after. Admin is Go-only, which suits operator tooling; PHP
+  has the integration half only.

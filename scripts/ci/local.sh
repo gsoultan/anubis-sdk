@@ -3,12 +3,11 @@
 # Every suite in this repository, in one command.
 #
 #   scripts/ci/local.sh            everything the machine can run
-#   scripts/ci/local.sh go node    only the named languages
+#   scripts/ci/local.sh go         only the named languages
 #
 # A missing toolchain is reported as SKIPPED and makes the run exit non-zero at
 # the end. A green tick that only means "php was not installed" is worse than
-# no suite at all — the whole point of this file is that four languages cannot
-# be held in anyone's head.
+# no suite at all.
 set -uo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -76,23 +75,6 @@ if want go; then
   fi
 fi
 
-# ---- Node -----------------------------------------------------------------
-
-if want node; then
-  say "Node"
-  if ! have bun; then
-    skip "node" "no bun"
-  else
-    cd "$ROOT/node"
-    if [ ! -d node_modules ]; then
-      run "bun install" bun install
-    fi
-    run "tsc --noEmit" bunx tsc -p tsconfig.json --noEmit
-    run "bun test" bun test src
-    cd "$ROOT"
-  fi
-fi
-
 # ---- PHP ------------------------------------------------------------------
 
 if want php; then
@@ -109,21 +91,6 @@ if want php; then
     done
     [ $lint_failed -eq 0 ] && ok "php -l"
     run "php tests/run.php" php tests/run.php
-    cd "$ROOT"
-  fi
-fi
-
-# ---- Java -----------------------------------------------------------------
-
-if want java; then
-  say "Java"
-  if ! have mvn; then
-    skip "java" "no maven"
-  elif ! have javac; then
-    skip "java" "no jdk — /usr/bin/javac on macOS may be a stub"
-  else
-    cd "$ROOT/java"
-    run "mvn test" mvn -q -o test
     cd "$ROOT"
   fi
 fi
