@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package anubis.v1;
+
+option go_package = "github.com/gsoultan/anubis/gen/go/anubis/v1;anubisv1";
+
+// Token introspection and revocation. Service-authenticated callers only
+// (api key or client credentials); most applications should verify offline
+// via pkg/anubis instead — introspection puts Anubis in the hot path.
+service TokenService {
+  rpc Introspect(IntrospectRequest) returns (IntrospectResponse);
+  rpc Revoke(RevokeRequest) returns (RevokeResponse);
+}
+
+message IntrospectRequest {
+  string token = 1;
+}
+
+message IntrospectResponse {
+  bool active = 1;
+  string sub = 2;
+  string sid = 3;
+  string tid = 4;
+  string realm = 5;
+  repeated string roles = 6;
+  map<string, string> scopes = 7;
+  repeated string amr = 8;
+  repeated string aud = 9;
+  int64 exp = 10;
+  int64 auth_time = 11;
+  int32 ial = 12;
+  int32 epoch = 13;
+}
+
+message RevokeRequest {
+  string token = 1;
+  string token_type_hint = 2;  // "refresh_token" | "access_token"
+}
+
+message RevokeResponse {}

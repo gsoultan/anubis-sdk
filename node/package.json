@@ -1,0 +1,45 @@
+{
+  "name": "@gsoultan/anubis-sdk",
+  "version": "0.1.0",
+  "description": "Node client for authenticating and authorising against an Anubis identity service",
+  "keywords": ["anubis", "sso", "oidc", "paseto", "authorization", "rbac"],
+  "homepage": "https://github.com/gsoultan/anubis-sdk#readme",
+  "bugs": {
+    "url": "https://github.com/gsoultan/anubis-sdk/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gsoultan/anubis-sdk.git",
+    "directory": "node"
+  },
+  "author": "gsoultan",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "bun test src",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.0",
+    "typescript": "^7.0.2"
+  },
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

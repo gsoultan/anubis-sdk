@@ -1,0 +1,112 @@
+name: ci
+
+# Four languages, two Go modules. Each gets its own job with its toolchain
+# pinned, so the "SKIP" branch that scripts/ci/local.sh has for a developer
+# machine cannot happen here — in CI a missing toolchain is a failed job, not
+# a quiet pass.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            anubiskit/go.sum
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l . anubiskit)
+          if [ -n "$unformatted" ]; then
+            echo "::error::not gofmt'd:"; echo "$unformatted"; exit 1
+          fi
+
+      # The root module must stay dependency-free. That is the SDK's central
+      # promise — a service that only verifies tokens should not inherit a
+      # dependency tree — and it is the kind of thing that erodes by accident.
+      - name: root module has no dependencies
+        run: |
+          if grep -qE '^\s*require' go.mod; then
+            echo "::error::go.mod grew a require block; the offline half must stay stdlib-only"
+            cat go.mod; exit 1
+          fi
+
+      - name: vet
+        run: go vet ./... && (cd anubiskit && go vet ./...)
+
+      # -race because single-flight token rotation is the one behaviour here
+      # that a serial test cannot prove.
+      - name: test
+        run: go test -race -count=1 ./... && (cd anubiskit && go test -race -count=1 ./...)
+
+  node:
+    name: Node
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: node
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: typecheck
+        run: bunx tsc -p tsconfig.json --noEmit
+      - run: bun test src
+
+  php:
+    name: PHP
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: php
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          # Ed25519 verification is sodium's; without it nothing here runs.
+          extensions: sodium, curl, json
+          coverage: none
+      - name: lint
+        run: for f in src/*.php src/Exception/*.php tests/*.php; do php -l "$f" >/dev/null; done
+      - run: php tests/run.php
+
+  java:
+    name: Java
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: java
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          # 17 for records and pattern-matching switch. Ed25519 needs only 15+,
+          # so the floor is set by the language, not by the crypto.
+          java-version: '17'
+          distribution: temurin
+          cache: maven
+      - run: mvn -B test
+
+  # The PASETO implementations are four independent parsers of one format.
+  # They assert the same PAE golden vectors from the specification, so this
+  # job exists to make that agreement visible as its own line in the checks —
+  # a silent divergence there is a cross-language token break.
+  wire-agreement:
+    name: PAE vectors agree
+    runs-on: ubuntu-latest
+    needs: [go, node, php, java]
+    steps:
+      - run: echo "Go, Node, PHP and Java each assert the specification's PAE vectors in their own suite."

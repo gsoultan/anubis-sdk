@@ -1,0 +1,225 @@
+syntax = "proto3";
+
+package anubis.v1;
+
+import "anubis/v1/common.proto";
+
+option go_package = "github.com/gsoultan/anubis/gen/go/anubis/v1;anubisv1";
+
+// Authentication. Failure responses are uniform in message AND timing: the
+// KDF runs even when the user does not exist (docs/security.md).
+service AuthService {
+  rpc Login(LoginRequest) returns (LoginResponse);
+  rpc VerifyMfa(VerifyMfaRequest) returns (VerifyMfaResponse);
+  rpc Refresh(RefreshRequest) returns (RefreshResponse);
+  // Logout* require a bearer access token.
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+  rpc LogoutAll(LogoutAllRequest) returns (LogoutAllResponse);
+  rpc LogoutSession(LogoutSessionRequest) returns (LogoutSessionResponse);
+  // Device-bound key login: challenge -> local biometric unlock -> signature.
+  rpc DeviceChallenge(DeviceChallengeRequest) returns (DeviceChallengeResponse);
+  rpc DeviceVerify(DeviceVerifyRequest) returns (DeviceVerifyResponse);
+  // Self-registration; public realms with self_registration=true only.
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc VerifyEmail(VerifyEmailRequest) returns (VerifyEmailResponse);
+
+  // --- second-factor enrolment (bearer token required) --------------------
+  // Two steps on purpose: the secret is only committed once the user proves
+  // they can generate a code from it, so a mistyped transfer to the
+  // authenticator cannot lock them out of their own account.
+  rpc BeginTotpEnrollment(BeginTotpEnrollmentRequest) returns (BeginTotpEnrollmentResponse);
+  rpc ConfirmTotpEnrollment(ConfirmTotpEnrollmentRequest) returns (ConfirmTotpEnrollmentResponse);
+  // Device-bound key: the device generates the keypair inside its secure
+  // element and sends only the PUBLIC key. Biometric data never travels.
+  rpc EnrollDeviceKey(EnrollDeviceKeyRequest) returns (EnrollDeviceKeyResponse);
+
+  // Service-to-service: OAuth2 client_credentials against an application's
+  // registered secret. Returns an access token with no session and no
+  // refresh — a service does not "log in", it presents its identity.
+  rpc ClientCredentials(ClientCredentialsRequest) returns (ClientCredentialsResponse);
+}
+
+message BeginTotpEnrollmentRequest {
+  // Only for the enrol-or-deny path: the grant_token from a refused sign-in,
+  // which proves the password was accepted. Ordinary enrolment sends nothing
+  // here and is authorised by the session.
+  //
+  // Not to be confused with `enrollment_token` below, which carries the
+  // pending secret between Begin and Confirm.
+  string grant_token = 1;
+}
+
+message BeginTotpEnrollmentResponse {
+  // otpauth:// URI for the QR code, and the raw secret for manual entry.
+  string provisioning_uri = 1;
+  string secret = 2;
+  // Opaque handle carrying the pending secret; expires in 10 minutes.
+  string enrollment_token = 3;
+  int32 expires_in = 4;
+}
+
+message ConfirmTotpEnrollmentRequest {
+  string enrollment_token = 1;
+  string code = 2;
+  // As on BeginTotpEnrollmentRequest.
+  string grant_token = 3;
+}
+
+message ConfirmTotpEnrollmentResponse {
+  string credential_id = 1;
+  // Single-use recovery codes, shown exactly once: an authenticator lost
+  // without them means an account recovery ticket for a human to judge.
+  repeated string recovery_codes = 2;
+}
+
+message EnrollDeviceKeyRequest {
+  // base64url raw Ed25519 public key generated in the Secure Enclave /
+  // Android Keystore, gated on biometric unlock.
+  string public_key = 1;
+  string label = 2;
+}
+
+message EnrollDeviceKeyResponse {
+  string credential_id = 1;
+}
+
+message ClientCredentialsRequest {
+  string tenant = 1;
+  string client_id = 2;
+  string client_secret = 3;
+  // Optional audience; defaults to the calling application itself.
+  string audience = 4;
+}
+
+message ClientCredentialsResponse {
+  string access_token = 1;
+  string token_type = 2;
+  int32 expires_in = 3;
+}
+
+message LoginRequest {
+  string tenant = 1;     // tenant slug
+  string realm = 2;      // realm code; empty = "internal"
+  string username = 3;
+  string password = 4;
+  string client_id = 5;  // application slug the tokens are minted for
+  string device_fp = 6;
+}
+
+message MfaChallenge {
+  string mfa_token = 1;             // anb.local.v1, single use, 60s
+  repeated string methods = 2;      // "totp", "device_key"
+  int32 expires_in = 3;
+}
+
+message LoginResponse {
+  oneof result {
+    TokenPair tokens = 1;
+    MfaChallenge mfa = 2;
+    // The realm requires a factor this member has not enrolled, and the
+    // deadline has passed. No session is issued — but the refusal carries
+    // the means to comply, which is what makes it enrol-or-deny rather than
+    // deny. See docs/enrolment-rollout.md.
+    EnrolmentChallenge enrolment_required = 3;
+  }
+  // Set ALONGSIDE `tokens` while the deadline is still ahead: sign-in works
+  // and this is the warning. A client that ignores it costs its user access
+  // on the deadline with no notice.
+  EnrolmentChallenge enrolment_due = 4;
+}
+
+message EnrolmentChallenge {
+  // What the realm requires and this member has not enrolled.
+  repeated string factors = 1;
+  // Unix seconds: when enforcement starts, or when it started.
+  int64 deadline = 2;
+  // Set only when the deadline has passed. Pass it to BeginTotpEnrollment
+  // and ConfirmTotpEnrollment in place of a session — the session is exactly
+  // what the policy is withholding, so requiring one would make the policy
+  // impossible to satisfy.
+  string grant_token = 3;
+  int32 expires_in = 4;
+}
+
+message VerifyMfaRequest {
+  string mfa_token = 1;
+  string method = 2;  // "totp"
+  string code = 3;
+}
+
+message VerifyMfaResponse {
+  TokenPair tokens = 1;
+}
+
+message RefreshRequest {
+  string refresh_token = 1;
+}
+
+message RefreshResponse {
+  TokenPair tokens = 1;
+}
+
+message LogoutRequest {}
+
+message LogoutResponse {}
+
+message LogoutAllRequest {}
+
+message LogoutAllResponse {
+  int32 sessions_revoked = 1;
+}
+
+message LogoutSessionRequest {
+  string session_id = 1;
+}
+
+message LogoutSessionResponse {}
+
+message DeviceChallengeRequest {
+  string tenant = 1;
+  string realm = 2;
+  string device_id = 3;  // credential id of the enrolled device key
+}
+
+message DeviceChallengeResponse {
+  string nonce = 1;      // base64url; single use
+  int32 expires_in = 2;
+}
+
+message DeviceVerifyRequest {
+  string tenant = 1;
+  string nonce = 2;
+  string key_id = 3;     // credential id
+  string signature = 4;  // base64url ed25519 signature over the nonce bytes
+  string client_id = 5;
+  string device_fp = 6;
+}
+
+message DeviceVerifyResponse {
+  TokenPair tokens = 1;
+}
+
+message ConsentInput {
+  string purpose = 1;
+  string policy_version = 2;
+}
+
+message RegisterRequest {
+  string tenant = 1;
+  string realm = 2;
+  string username = 3;
+  string email = 4;
+  string password = 5;
+  repeated ConsentInput consents = 6;
+}
+
+message RegisterResponse {
+  string identity_id = 1;
+  bool verification_required = 2;
+}
+
+message VerifyEmailRequest {
+  string token = 1;
+}
+
+message VerifyEmailResponse {}

@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package anubis.v1;
+
+import "anubis/v1/common.proto";
+
+option go_package = "github.com/gsoultan/anubis/gen/go/anubis/v1;anubisv1";
+
+// The decision endpoint. Supply every axis the grant might constrain: an
+// omitted axis on a strict grant is DENIED, not ignored (ADR-0004).
+// Self-scoped access passes the record owner as the reserved key "_owner".
+service AuthzService {
+  rpc Authorize(AuthorizeRequest) returns (AuthorizeResponse);
+  rpc Explain(ExplainRequest) returns (ExplainResponse);
+  // Re-issue the caller's access token pinned to a different active scope,
+  // without re-authentication. Mirrors AWS AssumeRole.
+  rpc SwitchScope(SwitchScopeRequest) returns (SwitchScopeResponse);
+}
+
+message AuthorizeRequest {
+  string subject = 1;                 // identity id
+  string permission = 2;              // "app:resource:action"
+  map<string, string> scopes = 3;     // axis code -> target node id ("_owner" reserved)
+  // From the token the calling application holds; enables step-up decisions.
+  repeated string amr = 4;
+  int64 auth_time = 5;
+}
+
+message AuthorizeResponse {
+  bool allow = 1;
+  // On deny: "scope_mismatch" | "permission_not_held" | "identity_inactive" |
+  // "insufficient_assurance" | "self_scope_required" | "axis_unresolved" |
+  // "step_up_required" | ...
+  string reason = 2;
+  string failing_axis = 3;
+  string message = 4;
+  // step_up_required detail — machine-readable so the app does not guess.
+  repeated string required_amr = 5;
+  string max_auth_age = 6;
+  repeated string current_amr = 7;
+  string auth_age = 8;
+}
+
+message ExplainRequest {
+  string subject = 1;
+  string permission = 2;
+  map<string, string> scopes = 3;
+}
+
+message ExplainResponse {
+  bool allow = 1;
+  string reason = 2;
+  string failing_axis = 3;
+  // Full evaluation tree from authorize_explain(), JSON-encoded: identity
+  // gates, permission gates, per-grant per-axis satisfaction with node lists,
+  // strict axes left unaddressed, provenance (which role via which role).
+  string detail_json = 4;
+}
+
+message SwitchScopeRequest {
+  map<string, string> scopes = 1;  // desired active scope per axis
+}
+
+message SwitchScopeResponse {
+  TokenPair tokens = 1;
+}

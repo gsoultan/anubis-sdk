@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package billing.v1;
+
+option go_package = "github.com/gsoultan/anubis-sdk/anubiskit/examples/grpc/pb;billingpb";
+
+// Invoices is the same service the HTTP and AMQP examples serve. The proto
+// describes the wire; it says nothing about who may call it, because that is
+// an endpoint-layer concern and lives in package billing.
+service Invoices {
+  rpc List(ListRequest) returns (ListResponse);
+  rpc Approve(ApproveRequest) returns (ApproveResponse);
+}
+
+message Invoice {
+  string id = 1;
+  string org_id = 2;
+  string customer_id = 3;
+  int64 amount = 4;
+  bool approved = 5;
+  string approved_by = 6;
+}
+
+message ListRequest {
+  string org_id = 1;
+}
+
+message ListResponse {
+  repeated Invoice invoices = 1;
+}
+
+message ApproveRequest {
+  string invoice_id = 1;
+}
+
+message ApproveResponse {
+  Invoice invoice = 1;
+}

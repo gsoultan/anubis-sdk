@@ -1,0 +1,21 @@
+# Go
+*.test
+coverage.out
+
+# Node
+node/node_modules/
+node/dist/
+node/*.tsbuildinfo
+
+# PHP
+php/vendor/
+php/composer.lock
+
+# Java
+java/target/
+
+# Tooling artifacts. Local agent scratch, not part of the SDK. .serena/ also
+# holds working notes that cite the (private) server repository by name, and
+# this repository is public.
+graphify-out/
+.serena/

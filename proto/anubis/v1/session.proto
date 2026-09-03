@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package anubis.v1;
+
+option go_package = "github.com/gsoultan/anubis/gen/go/anubis/v1;anubisv1";
+
+// The signed-in user's own view. Bearer token required.
+service SessionService {
+  rpc GetMe(GetMeRequest) returns (GetMeResponse);
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc RevokeSession(RevokeSessionRequest) returns (RevokeSessionResponse);
+}
+
+message GetMeRequest {}
+
+message GetMeResponse {
+  string identity_id = 1;
+  string tenant = 2;
+  string realm = 3;
+  string username = 4;
+  string email = 5;
+  repeated string roles = 6;
+  repeated string permissions = 7;  // effective permission keys
+  map<string, string> active_scopes = 8;
+  repeated string amr = 9;
+  int32 ial = 10;
+  string session_id = 11;
+}
+
+message ListSessionsRequest {}
+
+message Session {
+  string id = 1;
+  int64 created_at = 2;
+  int64 last_seen_at = 3;
+  int64 expires_at = 4;
+  string ip = 5;
+  string user_agent = 6;
+  repeated string amr = 7;
+  bool current = 8;
+}
+
+message ListSessionsResponse {
+  repeated Session sessions = 1;
+}
+
+message RevokeSessionRequest {
+  string session_id = 1;
+}
+
+message RevokeSessionResponse {}
