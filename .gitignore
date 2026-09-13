@@ -2,10 +2,6 @@
 *.test
 coverage.out
 
-# PHP
-php/vendor/
-php/composer.lock
-
 # Tooling artifacts. Local agent scratch, not part of the SDK. .serena/ also
 # holds working notes that cite the (private) server repository by name, and
 # this repository is public.

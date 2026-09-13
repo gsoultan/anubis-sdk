@@ -85,14 +85,13 @@ import anubis "github.com/gsoultan/anubis-sdk"
 
 ## Status
 
-Both clients are implemented and tested: Go (79 cases across the root,
-`keys`, `paseto`, `admin` and the examples, plus 21 in `anubiskit`,
-race-clean) and PHP (39). Both PASETO implementations assert the same PAE
-golden vectors, so token handling is pinned byte for byte.
+Implemented and tested: 79 cases across the root, `keys`, `paseto`, `admin`
+and the examples, plus 21 in `anubiskit`, race-clean. `paseto/` asserts the
+specification's PAE golden vectors, so token handling is pinned byte for byte
+against the format.
 
 ```bash
-go test -race ./...                     # and: cd anubiskit && go test -race ./...
-cd php  && php tests/run.php
+scripts/ci/local.sh   # gofmt, vet and -race over both modules
 ```
 
 ## The claim set is not the API

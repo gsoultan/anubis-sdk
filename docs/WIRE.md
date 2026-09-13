@@ -2,7 +2,7 @@
 
 What an Anubis installation actually serves, pinned to the running server
 rather than to the design documents. Anything here can be spoken with `curl`;
-the SDKs are a convenience, not a requirement.
+the SDK is a convenience, not a requirement.
 
 Base URL is the installation's origin — `https://anubis.internal`. Everything
 is on one port.
@@ -20,12 +20,12 @@ That naming seam is real and it bites. `AuthService.Refresh` answers
 `{"tokens":{"accessToken":…,"expiresIn":600}}`, while `POST /v1/token` answers
 `{"access_token":…,"expires_in":600}` — the same pair, spelled two ways,
 because the Connect procedures are rendered by protojson and the browser
-endpoint writes its JSON by hand. Every SDK in this repository carries two
-decoders for one concept, and that is why.
+endpoint writes its JSON by hand. The SDK carries two decoders for one
+concept, and that is why — so does anything else that speaks both.
 
 **Requests may use either spelling.** protojson accepts both the proto field
 name and lowerCamelCase on input, so `client_id` and `clientId` both work. The
-SDKs send proto names, which is what the API documentation shows.
+The SDK sends proto names, which is what the API documentation shows.
 
 **int64 is a JSON string.** protojson renders 64-bit integers quoted, because a
 JSON number cannot hold the range:
@@ -101,7 +101,7 @@ in about forty lines without a protobuf runtime:
 string code = 1;  string request_id = 2;  map<string,string> details = 3;
 ```
 
-Every SDK here does exactly that, rather than take on the dependency. Reading
+The SDK does exactly that, rather than take on the dependency. Reading
 `value` is worth the effort: without it, a stolen-token signal is
 indistinguishable from a bad password.
 
@@ -156,7 +156,7 @@ grant_type=authorization_code&code=…&code_verifier=…&redirect_uri=…&client
 > **The token endpoint does not currently verify `client_secret`.** The
 > discovery document advertises `client_secret_post`, and the handler reads
 > `grant_type`, `code`, `code_verifier`, `redirect_uri` and `client_id` — but
-> never the secret. PKCE is what binds the exchange today. The SDKs send the
+> never the secret. PKCE is what binds the exchange today. The SDK sends the
 > secret anyway, so they are already correct when the server starts checking
 > it; do not rely on it as proof of client identity until then.
 
@@ -191,6 +191,13 @@ signature over `PAE(["v4.public.", message, footer, implicit])`, footer
 `{"kid":"…"}`. Verify with any Ed25519 implementation, then check `iss` and —
 **not optional** — `aud`. Without the audience check, a token minted for one
 application is accepted by another.
+
+`PAE` is pre-authentication encoding, and getting it subtly wrong produces a
+parser that verifies its own tokens and nothing else — the failure is silent
+until it meets a token it did not mint. The specification's golden vectors are
+asserted in [`paseto/paseto_test.go`](../paseto/paseto_test.go); check a new
+implementation against those rather than against this one, since the vectors
+belong to the format and this SDK does not.
 
 `kid` arrives inside an attacker-supplied token, so it may only ever index a
 bounded, already-loaded map. Refetch on an unknown kid at most once per
@@ -300,7 +307,7 @@ X-Original-URI · X-Original-Method · X-Original-Host · X-Anubis-Tenant
 
 ## Procedures
 
-| Service | Methods used by these SDKs |
+| Service | Methods used by the SDK |
 | :--- | :--- |
 | `AuthService` | `Login` `VerifyMfa` `Refresh` `Logout` `LogoutAll` `LogoutSession` `ClientCredentials` `BeginTotpEnrollment` `ConfirmTotpEnrollment` `Register` |
 | `AuthzService` | `Authorize` `Explain` `SwitchScope` |

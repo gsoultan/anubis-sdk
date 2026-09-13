@@ -1,30 +1,27 @@
 # anubis-sdk
 
-Clients for integrating an application with an [Anubis](https://github.com/gsoultan/anubis)
-identity service, in Go and PHP.
+The Go client for integrating an application with an
+[Anubis](https://github.com/gsoultan/anubis) identity service: **verify
+offline, ask before you act**, typed refusals you can branch on, and a refusal
+to let you skip the checks that matter.
 
-Both are the same small library in two languages: **verify offline, ask before
-you act**, typed refusals you can branch on, and a refusal to let you skip the
-checks that matter. Neither depends on the server's source — they speak
+```bash
+go get github.com/gsoultan/anubis-sdk
+```
+
+**No dependencies.** Not "few" — the root module's `go.mod` has no `require`
+block at all, and CI fails if one appears. A service that only wants to verify
+a token should not inherit a dependency tree for it. Ed25519 is
+`crypto/ed25519`; PASETO `v4.public` is a format, and the format is written
+here while the primitives are not.
+
+It does not depend on the server's source either. It speaks
 [the wire contract](docs/WIRE.md).
-
-| Language | Package | Install | Runtime deps |
-| --- | --- | --- | --- |
-| **Go** | `github.com/gsoultan/anubis-sdk` | `go get github.com/gsoultan/anubis-sdk` | none — stdlib only |
-| **PHP** | `gsoultan/anubis-sdk` | `composer require gsoultan/anubis-sdk` | ext-curl, ext-json, ext-sodium |
-
-PHP publishes from a read-only mirror, because Packagist reads `composer.json`
-only from a repository root and this one lives in `php/`. `anubiskit` is
-deliberately untagged — see [CHANGELOG.md](CHANGELOG.md).
-
-No third-party cryptography in either: Ed25519 comes from `crypto/ed25519` and
-ext-sodium. PASETO `v4.public` is a format, and formats are written here;
-primitives are not.
 
 ## Any other language
 
 There is no client library for your language here, and you do not need one.
-Everything an SDK does is HTTP against a documented contract:
+Everything this SDK does is HTTP against a documented contract:
 [**`docs/WIRE.md`**](docs/WIRE.md) is normative — routes, the two JSON naming
 conventions and the seam between them, the claim set, the keys document, the
 error envelope. It is written to be implemented against, and anything in it
@@ -32,7 +29,10 @@ can be spoken with `curl`.
 
 Read [Four things worth knowing before you ship](#four-things-worth-knowing-before-you-ship)
 first. Those four are what a hand-written client most often gets wrong, and
-three of them are silent when they are wrong.
+three of them are silent when they are wrong. For PASETO itself,
+[`paseto/paseto_test.go`](paseto/paseto_test.go) asserts the specification's
+PAE golden vectors — check a hand-written implementation against those rather
+than against this one.
 
 ## The shape of an integration
 
@@ -45,7 +45,7 @@ database — the SDK checks the token's Ed25519 signature against published keys
 depends on grants, scopes and identity state that only Anubis holds and that
 change without your application redeploying, so it is a call.
 
-So each SDK gives you two objects: a `Verifier` you embed everywhere, and a
+So the SDK gives you two objects: a `Verifier` you embed everywhere, and a
 `Client` you reach for when you need Anubis to decide something. A service that
 only consumes tokens never constructs the second one.
 
@@ -61,7 +61,7 @@ A trusted back end that asks about its users wants a tenant API key instead
 (`anb_live_…`), from the same screen. It is the tenant's credential, not a
 person's.
 
-## Go
+## Using it
 
 ```go
 import anubis "github.com/gsoultan/anubis-sdk"
@@ -115,41 +115,12 @@ go-kit's own `auth/jwt`: a `RequestFunc` lifts the credential inward and
 service and endpoint layers written once and shared by all three. It is a
 separate module so the root stays dependency-free.
 
-## PHP
-
-```php
-use Anubis\Client;
-use Anubis\Verifier;
-use Anubis\Exception\DeniedException;
-use Anubis\Exception\StepUpRequiredException;
-
-$verifier = new Verifier(
-    issuer:   'https://anubis.internal',
-    audience: 'billing-api',
-    keysUrl:  'https://anubis.internal/.well-known/anubis-keys.json',
-);
-$claims    = $verifier->verify(Verifier::bearer($_SERVER['HTTP_AUTHORIZATION'] ?? null));
-$principal = new Anubis\Principal($claims, $token);
-
-try {
-    $client->require($principal, 'billing:invoice:approve', [
-        'org' => $invoice->orgId, 'customer' => $invoice->customerId,
-    ]);
-} catch (StepUpRequiredException $e) {
-    $redirect = $client->beginStepUp($e, ['redirectUri' => $callbackUri]);
-    header('Set-Cookie: ' . $redirect['cookie']);
-    header('Location: ' . $redirect['url']);
-} catch (DeniedException $e) {
-    http_response_code(403);   // $e->failingAxis names the axis that failed
-}
-```
-
 ## Four things worth knowing before you ship
 
 **The audience check is not optional.** A verifier without one accepts tokens
 minted for the HR application in the payments application — the classic
-confused deputy. Every one of these SDKs refuses to construct a verifier
-without an audience, and none of them has a flag to skip it.
+confused deputy. `NewVerifier` refuses to construct one without an audience,
+and there is no flag to skip it.
 
 **Supply every axis the action touches.** On a strict axis an omitted axis is
 *denied*, not ignored. "I forgot an axis" and "they may not do this" look
@@ -160,16 +131,15 @@ is really a client bug.
 rotate. Two concurrent handlers that both refresh will produce
 `refresh_token_reuse_detected`, which Anubis correctly reads as theft and
 answers by revoking the family and the session — your own users, logged out, by
-your own client. In Go use `TokenSource`, which serialises refreshes behind a
-single flight. In PHP the contention is between *processes*, which no
-in-process lock can fix: take a lock in whatever your sessions already share —
-and that is the shape of the problem in any language whose runtime is
-per-request, so a hand-written client needs the same lock.
+your own client. Use `TokenSource`, which serialises refreshes behind a single
+flight. Writing your own client does not remove the constraint, and in a
+runtime whose processes are per-request it is harder: no in-process lock helps,
+so take one in whatever your sessions already share.
 
 **Mount the back-channel logout receiver.** It is the half of sign-out
 applications skip, because it is the half they have to write themselves — and
 an application with its own session cookie keeps a user signed in after they
-have signed out everywhere. Each SDK ships it as a handler; wire it to the URI
+have signed out everywhere. The SDK ships it as a handler; wire it to the URI
 you registered.
 
 ## Repository layout
@@ -180,7 +150,6 @@ admin/            grants, roles and scope nodes — operator credentials only
 anubistest/       an in-process Anubis for tests, integration plane and admin
 anubiskit/        go-kit adapter for HTTP, gRPC and AMQP — a SEPARATE module
 examples/         a worked browser application, end-to-end tested
-php/              the PHP client, self-contained, published from a split mirror
 proto/anubis/v1/  the vendored contract, the single source for codegen
 docs/WIRE.md      the contract in prose, for people not using an SDK
 docs/MIGRATION.md pkg/anubis → anubis-sdk, and the dependency inversion
@@ -189,9 +158,8 @@ DESIGN.md         why the SDK is shaped this way
 
 ## The vocabulary
 
-None of these is a `string`, a `string[]` or a map, in either language. Each
-was, once, and each was a place to pass the right shape with the wrong
-meaning:
+None of these is a `string`, a `[]string` or a map. Each was, once, and each
+was a place to pass the right shape with the wrong meaning:
 
 | Type | What it knows | The mistake it makes visible |
 | :--- | :--- | :--- |
@@ -225,35 +193,36 @@ site to prevent nothing.
 
 ## Status
 
-Both languages are implemented and tested — offline verification, PKCE
-sign-in, decisions with step-up, rotation with reuse detection, back-channel
-logout, client credentials:
+Implemented and tested — offline verification, PKCE sign-in, decisions with
+step-up, rotation with reuse detection, back-channel logout, client
+credentials:
 
-| | Tests | Runner |
+| Module | Tests | |
 | :--- | ---: | :--- |
-| Go | 79 (root, `keys`, `paseto`, `admin`, examples) + 21 (`anubiskit`) | `go test -race ./...` |
-| PHP | 39 | `php tests/run.php` |
+| root (`.`, `keys`, `paseto`, `admin`, `examples`) | 79 | `go test -race ./...` |
+| `anubiskit` (HTTP, gRPC, AMQP) | 21 | `cd anubiskit && go test -race ./...` |
 
-Two languages and two Go modules, one command:
+Two modules, one command:
 
 ```bash
-scripts/ci/local.sh              # everything this machine can run
-scripts/ci/local.sh go           # or just the one you touched
+scripts/ci/local.sh
 ```
 
-A missing toolchain is reported as **SKIP** and exits non-zero. A green tick
-that only means "php was not installed" is worse than no suite at all.
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) gives each language its
-own job so that branch cannot be taken in CI, and asserts one thing the tests
-cannot: that the root `go.mod` still has no `require` block.
+It runs gofmt, vet and the race detector over both, and asserts the thing the
+tests cannot: that the root `go.mod` still has no `require` block.
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) does the same, with the
+toolchain pinned, so a missing `go` on a developer machine cannot read as a
+pass.
 
-Both PASETO implementations assert the same PAE golden vectors from the
-specification, so token handling is pinned byte for byte — and those vectors
-are the thing to check a hand-written client against too.
+`paseto/` asserts the specification's PAE golden vectors, which pins token
+handling byte for byte against the format rather than against this
+implementation of it.
 
-Node and Java clients were built and then removed before the first release;
-they are in the history at `3443a1d` if they are ever wanted back. Applications
-in those languages go against [`docs/WIRE.md`](docs/WIRE.md) directly.
+PHP, Node and Java clients were built and then removed before the first
+release. They are in the history — PHP at `d52d0c5`, Node and Java at
+`3443a1d` — if they are ever wanted back. Applications in those languages go
+against [`docs/WIRE.md`](docs/WIRE.md) directly, which is normative and was
+always the contract those clients were written to.
 
 ## Entitlement is a different question, and a different credential
 

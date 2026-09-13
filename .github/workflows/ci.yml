@@ -1,16 +1,15 @@
 name: ci
 
-# Two languages, two Go modules. Each gets its own job with its toolchain
-# pinned, so the "SKIP" branch that scripts/ci/local.sh has for a developer
-# machine cannot happen here — in CI a missing toolchain is a failed job, not
-# a quiet pass.
+# One language, two Go modules. The toolchain is pinned from go.mod, so the
+# "SKIP" branch that scripts/ci/local.sh has for a developer machine cannot
+# happen here — in CI a missing toolchain is a failed job, not a quiet pass.
 
 on:
   push:
     branches: [main]
   pull_request:
-  # release.yml calls this before it publishes anything, so a release cannot
-  # ship an artifact that the four suites have not agreed on.
+  # release.yml calls this before it tags anything, so a release cannot ship a
+  # commit the suite has not agreed on.
   workflow_call:
 
 permissions:
@@ -53,34 +52,3 @@ jobs:
       # that a serial test cannot prove.
       - name: test
         run: go test -race -count=1 ./... && (cd anubiskit && go test -race -count=1 ./...)
-
-  php:
-    name: PHP
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: php
-    steps:
-      - uses: actions/checkout@v4
-      - uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.2'
-          # Ed25519 verification is sodium's; without it nothing here runs.
-          extensions: sodium, curl, json
-          coverage: none
-      - name: lint
-        run: for f in src/*.php src/Exception/*.php tests/*.php; do php -l "$f" >/dev/null; done
-      - run: php tests/run.php
-
-  # The PASETO implementations are two independent parsers of one format. They
-  # assert the same PAE golden vectors from the specification, so this job
-  # exists to make that agreement visible as its own line in the checks — a
-  # silent divergence there is a cross-language token break, and the vectors
-  # are also what a hand-written client in any other language is checked
-  # against.
-  wire-agreement:
-    name: PAE vectors agree
-    runs-on: ubuntu-latest
-    needs: [go, php]
-    steps:
-      - run: echo "Go and PHP each assert the specification's PAE vectors in their own suite."

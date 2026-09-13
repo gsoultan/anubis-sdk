@@ -1,7 +1,7 @@
 # anubis-sdk — API design
 
 Clients for integrating an application with an [Anubis](https://github.com/gsoultan/anubis)
-installation, in Go and PHP.
+installation, in Go.
 
 Anubis is a private repository. That single fact decides the shape of this SDK:
 an application can no longer `go get github.com/gsoultan/anubis-sdk`, so
@@ -40,14 +40,11 @@ imports the `Verifier` and never constructs a `Client`. That is the property
 worth protecting: **what every service embeds must not drag a dependency tree
 behind it.**
 
-Both languages can verify with no third-party crypto, which keeps
+Verification needs no third-party crypto — Ed25519 is `crypto/ed25519` and
+PASETO `v4.public` is a format written here — so the root module's `go.mod` has
+no `require` block at all, which keeps
 [ADR-0002](https://github.com/gsoultan/anubis/blob/main/docs/adr/0002-dependency-policy.md)'s
-constraint intact on the client side too:
-
-| Language | Ed25519 from | Runtime deps |
-| :--- | :--- | :--- |
-| Go | `crypto/ed25519` | none — stdlib only |
-| PHP | `sodium_crypto_sign_verify_detached` (bundled since 7.2) | ext-sodium, ext-json |
+constraint intact on the client side too. CI fails if a `require` appears.
 
 ## 2. What is in scope
 
@@ -392,7 +389,7 @@ production binaries.
 
 ## 4. Errors
 
-One taxonomy, both languages, mapped from the `ErrorInfo.code` the server puts
+One taxonomy, mapped from the `ErrorInfo.code` the server puts
 in the Connect error detail — the body is authoritative over the HTTP status,
 because a proxy is free to rewrite a status and some do.
 
@@ -411,39 +408,28 @@ because a proxy is free to rewrite a status and some do.
 Every error carries `RequestID`, which correlates to `audit_log` and traces —
 the first thing anyone asks for when an integration misbehaves.
 
-Idiomatic per language: `errors.As` in Go, exception subclasses in PHP. A
-client written by hand branches on `error.code`, which is the same information
-under a different spelling — see `docs/WIRE.md`.
+`errors.As` in Go. A client written by hand branches on `error.code`, which is
+the same information under a different spelling — see `docs/WIRE.md`.
 
 ---
 
-## 5. The second language
+## 5. Other languages
 
-Same six capabilities, same names, idiomatic bindings.
+There are none, and that is the design.
 
-### PHP — PSR-15 middleware, Laravel service provider
+PHP, Node and Java bindings were written to this document and then cut before
+the first release — the full six capabilities each, each with its own suite.
+Removing them showed what they had always been: not the interface.
+`docs/WIRE.md` is normative and the bindings were written against it, not the
+other way round, so cutting one removes a convenience and leaves the contract
+exactly where it was.
 
-```php
-use Anubis\Verifier;
-use Anubis\Client;
-use Anubis\Exception\StepUpRequiredException;
-
-$verifier = new Verifier(issuer: 'https://anubis.internal',
-                         audience: 'billing-api',
-                         keysUrl:  'https://anubis.internal/.well-known/anubis-keys.json');
-
-$app->add(new AnubisMiddleware($verifier));          // PSR-15
-
-try {
-    $client->require('billing:invoice:approve',
-                     ['org' => $invoice->orgId, 'customer' => $invoice->customerId]);
-} catch (StepUpRequiredException $e) {
-    return redirect($client->stepUpUrl($e, $callbackUri));
-}
-```
-
-Laravel gets a guard and a `Route::middleware('anubis:billing:invoice:approve')`
-so the common case is a route annotation.
+An application in another language does what those bindings did.
+Connect-over-JSON for the procedures, the browser paths for sign-in and
+sign-out, Ed25519 over PASETO `v4.public` to verify. §4's taxonomy maps from
+`ErrorInfo.code`, which is on the wire and not a Go invention. `paseto/` holds
+the specification's PAE golden vectors, which is what a new implementation
+should be checked against — the vectors are the format's, not this SDK's.
 
 ---
 
@@ -463,7 +449,6 @@ anubis-sdk/
   anubiskit/             # separate module: go-kit over HTTP, gRPC and AMQP
   examples/billing-web/  # a worked browser application, end-to-end tested
   scripts/ci/local.sh    # every suite in one command
-  php/                   # the second binding, self-contained
   proto/anubis/v1/       # vendored contract, the single source for codegen
   docs/
     WIRE.md              the contract, for people not using an SDK
@@ -578,7 +563,7 @@ returning a string. It needs the ResponseWriter, exactly as `BeginLogin` does.
 **The primitives became a vocabulary.** §3 was written in `string`,
 `[]string` and `map[string]string`. Every one of those was a place to pass the
 right shape with the wrong meaning, so `Permission`, `Role`/`Roles`, `Axis`,
-`Scopes`, `AuthMethods` and `Identity` now exist in both languages. Scope
+`Scopes`, `AuthMethods` and `Identity` now exist as types. Scope
 *values* stayed plain strings: they are the caller's own identifiers, and
 wrapping them would add a conversion at every call site to prevent nothing.
 
@@ -592,15 +577,18 @@ Anubis middleware is written once rather than three times.
 ## 9. Assumptions
 
 - **Four languages**, matching `panmail-sdk`: Go, PHP, Java, Node. *Did not
-  hold.* Node and Java were built, tested and then cut before the first
-  release: applications in those languages go against `docs/WIRE.md` directly.
-  This was the assumption most worth stating, because it did change the shape
-  of the repository more than anything else in this document — two of the four
-  CI jobs, the npm half of the release workflow, and the version-agreement
-  check that existed only because `package.json` and `pom.xml` carried a
-  version number, all went with them. What survived unchanged is the thing
-  that mattered: `docs/WIRE.md` is normative, so removing a binding removes a
-  convenience rather than an interface.
+  hold — one language.* Node and Java were cut first, PHP after, all three
+  before the first release. This was the assumption most worth stating,
+  because it changed the shape of the repository more than anything else in
+  this document, and it did so in a direction worth naming: everything that
+  went with them was **release machinery, not capability**. Three of the four
+  CI jobs. The npm publish job. The version-agreement check, which existed
+  only because `package.json` and `pom.xml` carried version numbers that could
+  drift from the tag. The Packagist split-mirror script, which existed only
+  because Packagist will not read a `composer.json` outside a repository root.
+  A release is now `git push --tags`, with no registry, credential or mirror
+  in the path. What survived untouched is the thing that mattered:
+  `docs/WIRE.md` is normative, so removing a binding removed a convenience and
+  left the contract where it was.
 - **Integration first, admin second.** Held: the six capabilities in §2 landed
-  first, `admin/` after. Admin is Go-only, which suits operator tooling; PHP
-  has the integration half only.
+  first, `admin/` after.
