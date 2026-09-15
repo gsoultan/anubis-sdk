@@ -3,6 +3,7 @@ package anubistest
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	anubis "github.com/gsoultan/anubis-sdk"
 )
@@ -49,6 +50,21 @@ func (s *Server) AddScopeNode(n ScopeNodeRow) {
 type ScopeNodeRow struct {
 	ID, Name, ParentID, Status string
 	Axis                       anubis.Axis
+}
+
+// defaultScopeNodePage is the ListScopeNodes page size a server starts with.
+const defaultScopeNodePage = 50
+
+// ScopeNodePageSize sets how many nodes one ListScopeNodes page returns. The
+// real service clamps this itself; here it is a knob, so a test can prove a
+// client walks the pages instead of reading the first one and stopping.
+func (s *Server) ScopeNodePageSize(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if n < 1 {
+		n = 1
+	}
+	s.scopeNodePage = n
 }
 
 // PlatformKey makes the admin plane behave like the real one: only this
@@ -131,6 +147,12 @@ func (s *Server) listRoles(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"roles": []map[string]any{{
 		"id": "rol_1", "name": "clerk", "applicationSlug": "billing",
 		"description": "approves invoices", "isSystem": false,
+	}, {
+		// Retired from the catalog: still deciding for existing grants, but
+		// a picker that offers it is offering a dead end.
+		"id": "rol_2", "name": "auditor", "applicationSlug": "billing",
+		"description": "read-only review", "isSystem": false,
+		"deprecated": true,
 	}}})
 }
 
@@ -149,6 +171,10 @@ func (s *Server) getIdentity(w http.ResponseWriter, _ *http.Request) {
 		"realm": "internal", "status": "active", "assuranceLevel": 2,
 		// int64 as a JSON string, as protojson renders it.
 		"createdAt": "1735689600", "lastLoginAt": "1767225600",
+		// A realm with a statutory retention limit gives the sweeper a
+		// deadline. Zero for employees, which is why a console that never
+		// read it could print a dash for everybody and look correct.
+		"retentionUntil": "1798761600",
 	}})
 }
 
@@ -157,14 +183,20 @@ func (s *Server) listScopeNodes(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Axis            string `json:"axis"`
 		IncludeArchived bool   `json:"include_archived"`
+		PageSize        int    `json:"page_size"`
+		PageToken       string `json:"page_token"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
 	s.mu.Lock()
 	all := append([]ScopeNodeRow(nil), s.scopeNodes...)
+	size := s.scopeNodePage
 	s.mu.Unlock()
+	if size < 1 {
+		size = defaultScopeNodePage
+	}
 
-	out := make([]map[string]any, 0, len(all))
+	matched := make([]map[string]any, 0, len(all))
 	for _, n := range all {
 		if string(n.Axis) != req.Axis {
 			continue
@@ -172,12 +204,33 @@ func (s *Server) listScopeNodes(w http.ResponseWriter, r *http.Request) {
 		if n.Status == "archived" && !req.IncludeArchived {
 			continue
 		}
-		out = append(out, map[string]any{
+		matched = append(matched, map[string]any{
 			"id": n.ID, "axis": string(n.Axis), "name": n.Name,
 			"parentId": n.ParentID, "status": n.Status,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"nodes": out})
+
+	// Keyset paging, as the real service does it: page_size clamped here, and
+	// an opaque token that only this server has to be able to read back.
+	if req.PageSize > 0 && req.PageSize < size {
+		size = req.PageSize
+	}
+	start := 0
+	if req.PageToken != "" {
+		start, _ = strconv.Atoi(req.PageToken)
+		if start < 0 || start > len(matched) {
+			start = len(matched)
+		}
+	}
+	end := start + size
+	if end > len(matched) {
+		end = len(matched)
+	}
+	out := map[string]any{"nodes": matched[start:end]}
+	if end < len(matched) {
+		out["nextPageToken"] = strconv.Itoa(end)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func grantJSON(subject string, g GrantRow) map[string]any {

@@ -5,7 +5,7 @@ Format follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html), and while the major
 version is 0 the API may still move.
 
-## [0.1.0] — 2026-09-13
+## [0.1.0] — 2026-09-15
 
 First release.
 
@@ -37,6 +37,15 @@ First release.
 - **`admin/`**, roughly 120 operator procedures for provisioning tools
   and the console, including `Entitlements` for what a *person* holds as
   against what a *session* carries.
+  - `ScopeNodes` is **paged** — an axis can hold hundreds of thousands of
+    nodes, and the unpaged form returned the first page as though it were the
+    whole axis, with no error. `AllScopeNodes` walks every page and is what a
+    scope picker wants; `ScopeNodes` hands back `NextPage` for callers doing
+    their own. `anubistest` pages too, because a fake that answers every
+    listing in one page is what let this through.
+  - `Identity.RetentionDeadline()` reads the statutory retention limit's
+    deadline, and `Role.Deprecated` marks a role retired from the catalog —
+    still deciding for the grants that name it, but a dead end in a picker.
 - **`anubiskit/`**, go-kit middleware with HTTP, gRPC and AMQP transports
   sharing one service and endpoint layer.
 - **`anubistest/`**, an in-process server for testing integrations.

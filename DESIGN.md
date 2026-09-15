@@ -449,19 +449,30 @@ anubis-sdk/
   anubiskit/             # separate module: go-kit over HTTP, gRPC and AMQP
   examples/billing-web/  # a worked browser application, end-to-end tested
   scripts/ci/local.sh    # every suite in one command
-  proto/anubis/v1/       # vendored contract, the single source for codegen
+  proto/anubis/v1/       # vendored contract, for reference — nothing generates
   docs/
     WIRE.md              the contract, for people not using an SDK
     MIGRATION.md         pkg/anubis → anubis-sdk
-    COMPATIBILITY.md     SDK version ↔ Anubis version
-  scripts/gen.sh         regenerate every language from proto/
 ```
 
 `proto/` is vendored here rather than fetched from the private server repo,
 which is the point: the contract is public even though the implementation is
 not, and it is what a client in any language is written against.
-`scripts/gen.sh` regenerates the admin clients from it, so drift is a diff
-rather than a discovery.
+
+Nothing is generated from it, though. Every client here is hand-written
+against the wire (§8), and that is what keeps the root module free of
+dependencies — but it also means **nothing detects that the vendored contract
+has fallen behind the server**. An earlier version of this section claimed a
+`scripts/gen.sh` made drift "a diff rather than a discovery". There was no
+such script, and drift duly arrived as a discovery: `ListScopeNodes` grew
+keyset paging upstream, the hand-written client kept sending an unpaged
+request, and it silently rendered the first page of an axis as though it were
+the whole axis.
+
+CI cannot close this, because the server repository is private and CI has no
+checkout of it. Re-diffing `proto/` against the server is a step for whoever
+moves the server, and the honest thing is to say so here rather than to name a
+file that does the job and does not exist.
 
 ---
 

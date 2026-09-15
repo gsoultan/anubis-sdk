@@ -308,6 +308,11 @@ type Role struct {
 	AssignableAt    []string `json:"assignableAt"`
 	ParentIDs       []string `json:"parentIds"`
 	Patterns        []string `json:"patterns"`
+	// Deprecated is set when a manifest stops naming a role it owns. The role
+	// cannot be granted to anybody new and every grant that already names it
+	// keeps working, so authorize() never reads this — but a picker that
+	// offers it is offering a dead end.
+	Deprecated bool `json:"deprecated"`
 }
 
 // Qualified is the role as tokens and grants spell it: "<app>.<name>".
@@ -384,6 +389,10 @@ type Identity struct {
 	LastLoginAt  epoch            `json:"lastLoginAt"`
 	DisabledAt   epoch            `json:"disabledAt"`
 	AnonymizedAt epoch            `json:"anonymizedAt"`
+	// RetentionUntil is the deadline a statutory retention limit gives the
+	// sweeper to anonymise this identity. Zero when the realm sets no limit,
+	// which is the case for employees.
+	RetentionUntil epoch `json:"retentionUntil"`
 }
 
 // IsActive reports whether the identity may authenticate at all. A disabled
@@ -395,6 +404,11 @@ func (i Identity) Created() time.Time { return i.CreatedAt.time() }
 
 // LastLogin is when it last signed in. Zero if never.
 func (i Identity) LastLogin() time.Time { return i.LastLoginAt.time() }
+
+// RetentionDeadline is when the sweeper will anonymise this identity under the
+// realm's statutory retention limit. Zero when there is no limit — an access
+// review that renders this as a dash for everyone has stopped reading it.
+func (i Identity) RetentionDeadline() time.Time { return i.RetentionUntil.time() }
 
 // IdentityQuery filters a listing.
 type IdentityQuery struct {
@@ -463,21 +477,71 @@ type ScopeNodeQuery struct {
 	ParentID string // empty means the whole axis
 	Query    string
 	Archived bool
+	PageSize int
+	Page     string
 }
 
-// ScopeNodes lists nodes on an axis — what a scope picker renders.
-func (c *Client) ScopeNodes(ctx context.Context, q ScopeNodeQuery) ([]ScopeNode, error) {
+// ScopeNodePage is one page of scope nodes.
+type ScopeNodePage struct {
+	Nodes    []ScopeNode `json:"nodes"`
+	NextPage string      `json:"nextPageToken"`
+}
+
+// ScopeNodes lists one page of nodes on an axis.
+//
+// An axis can hold hundreds of thousands of nodes, so this listing is paged. A
+// caller that reads Nodes and ignores NextPage renders a truncated picker and
+// gets no error saying so — use AllScopeNodes unless you are doing your own
+// paging.
+func (c *Client) ScopeNodes(ctx context.Context, q ScopeNodeQuery) (*ScopeNodePage, error) {
 	req := map[string]any{
 		"axis": string(q.Axis), "parent_id": q.ParentID,
 		"query": q.Query, "include_archived": q.Archived,
+		"page_size": q.PageSize, "page_token": q.Page,
 	}
-	var out struct {
-		Nodes []ScopeNode `json:"nodes"`
-	}
+	var out ScopeNodePage
 	if err := c.call(ctx, procListScopeNodes, req, &out); err != nil {
 		return nil, err
 	}
-	return out.Nodes, nil
+	return &out, nil
+}
+
+// maxScopeNodes bounds AllScopeNodes. Past this many, an axis is not something
+// a picker should be rendering at all: the caller wants a search term, or its
+// own paging.
+const maxScopeNodes = 50_000
+
+// AllScopeNodes walks every page of a node listing — the whole axis, which is
+// what a scope picker renders and what feeds SwitchScope.
+//
+// This exists because the single-page form is the shape that truncates
+// silently: an axis holding more nodes than one page answers with a short list
+// and no error, and the user simply cannot find the org they hold.
+func (c *Client) AllScopeNodes(ctx context.Context, q ScopeNodeQuery) ([]ScopeNode, error) {
+	var all []ScopeNode
+	seen := map[string]bool{}
+	for {
+		page, err := c.ScopeNodes(ctx, q)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, page.Nodes...)
+		if page.NextPage == "" {
+			return all, nil
+		}
+		if len(all) > maxScopeNodes {
+			return nil, fmt.Errorf(
+				"anubis/admin: axis %q holds more than %d nodes; narrow it with Query, or page it with ScopeNodes",
+				q.Axis, maxScopeNodes)
+		}
+		// A server that hands back a token it has already given would
+		// otherwise spin here forever.
+		if seen[page.NextPage] {
+			return nil, fmt.Errorf("anubis/admin: axis %q repeated page token %q", q.Axis, page.NextPage)
+		}
+		seen[page.NextPage] = true
+		q.Page = page.NextPage
+	}
 }
 
 // ---- small helpers --------------------------------------------------------

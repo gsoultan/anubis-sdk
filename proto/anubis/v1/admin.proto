@@ -57,6 +57,12 @@ message Identity {
   int64 last_login_at = 12;
   int64 disabled_at = 13;
   int64 anonymized_at = 14;
+  // When the realm sets a statutory retention limit, the deadline the
+  // sweeper will anonymise this identity at. 0 = no limit (employees).
+  // The column and its index have existed since migrations/0008; nothing
+  // read them, so the console's Retention column could only ever print a
+  // dash -- including for the identities that really do have a deadline.
+  int64 retention_until = 15;
 }
 
 message ListIdentitiesRequest {
@@ -257,6 +263,10 @@ service ScopeAdminService {
   // Rotate a feed's credentials or move it to a new endpoint without losing
   // the source's history. Config is REPLACED, never merged.
   rpc UpdateSyncSource(UpdateSyncSourceRequest) returns (UpdateSyncSourceResponse);
+  // Changes WHEN a source runs, and nothing else. Separate from
+  // UpdateSyncSource because that replaces config wholesale and no client is
+  // ever sent a source's dsn or auth_header to send back.
+  rpc SetSyncSchedule(SetSyncScheduleRequest) returns (SetSyncScheduleResponse);
   rpc RunSync(RunSyncRequest) returns (RunSyncResponse);
   // ListSyncRuns is what a feed has actually done. The reconciler has
   // recorded every run since migration 0017; nothing read it until now, so
@@ -347,10 +357,17 @@ message ListScopeNodesRequest {
   string parent_id = 2;  // empty = whole axis
   string query = 3;
   bool include_archived = 4;
+  // Keyset paging. page_size is clamped server-side; page_token is opaque and
+  // comes from the previous response. An axis can hold hundreds of thousands
+  // of nodes, so an unpaged listing was never returning all of them.
+  int32 page_size = 5;
+  string page_token = 6;
 }
 
 message ListScopeNodesResponse {
   repeated ScopeNode nodes = 1;
+  // Empty when this was the last page.
+  string next_page_token = 2;
 }
 
 message CreateScopeNodeRequest {
@@ -412,6 +429,14 @@ message SyncSource {
   string status = 4;
   string config_json = 5;
   int64 last_run_at = 6;
+  // Seconds between scheduled runs. 0 = manual only, which is what every
+  // source created before 0045 stays. Floor of 300 when set: a structure is
+  // an org chart, and anything faster is polling somebody else's ERP for rows
+  // that did not move.
+  int32 interval_seconds = 7;
+  // When the scheduler will next run this source. 0 = never, i.e. manual.
+  // Read-only: set interval_seconds and the server derives this.
+  int64 next_run_at = 8;
 }
 
 message ListSyncSourcesRequest {}
@@ -433,6 +458,16 @@ message UpdateSyncSourceRequest {
 }
 
 message UpdateSyncSourceResponse {
+  SyncSource source = 1;
+}
+
+message SetSyncScheduleRequest {
+  string source_id = 1;
+  // 0 = manual only. Otherwise at least 300.
+  int32 interval_seconds = 2;
+}
+
+message SetSyncScheduleResponse {
   SyncSource source = 1;
 }
 
@@ -497,6 +532,119 @@ service AuthzAdminService {
   // Registers an application's permission/role/route catalog. Validates,
   // diffs, applies. Removed permissions are deprecated, never deleted.
   rpc ApplyManifest(ApplyManifestRequest) returns (ApplyManifestResponse);
+
+  // Catalog sources: where an application's permissions and roles are read
+  // from when nobody is pushing them. RunCatalogSource is the manual trigger;
+  // the scheduler's own entry point is not on this surface by design.
+  rpc ListCatalogSources(ListCatalogSourcesRequest) returns (ListCatalogSourcesResponse);
+  rpc CreateCatalogSource(CreateCatalogSourceRequest) returns (CreateCatalogSourceResponse);
+  rpc UpdateCatalogSource(UpdateCatalogSourceRequest) returns (UpdateCatalogSourceResponse);
+  rpc DeleteCatalogSource(DeleteCatalogSourceRequest) returns (DeleteCatalogSourceResponse);
+  rpc RunCatalogSource(RunCatalogSourceRequest) returns (RunCatalogSourceResponse);
+  rpc ListCatalogRuns(ListCatalogRunsRequest) returns (ListCatalogRunsResponse);
+}
+
+// CatalogSource is a configured origin for ONE application's catalog. The
+// application is a pin, not a parameter: it is fixed when the source is
+// created and UpdateCatalogSource ignores any attempt to move it.
+message CatalogSource {
+  string id = 1;
+  string application_slug = 2;
+  string name = 3;
+  string kind = 4;    // http
+  string format = 5;  // json | csv
+  string status = 6;  // active | disabled
+  // The kind's own settings. http: {"url":..., "auth_header":...}
+  string config_json = 7;
+  // 0 is a source that only runs when somebody asks. The floor is 300: a
+  // catalog is a document a team edits, not a data feed.
+  int32 interval_seconds = 8;
+  int64 last_run_at = 9;
+  // 0 when the source is manual — the scheduler will never pick it up.
+  int64 next_run_at = 10;
+  // How the most recent attempt ended: ok | failed | skipped | dry_run |
+  // running, or empty when it has never run. Carried on the source so a list
+  // can show a broken feed without a request per row.
+  string last_status = 11;
+}
+
+// CatalogRun is one attempt to read a source and apply what it returned.
+message CatalogRun {
+  string id = 1;
+  string source_id = 2;
+  int64 started_at = 3;
+  // 0 while a run is in flight, or if the process died mid-run — a row stuck
+  // like that is itself the diagnosis.
+  int64 finished_at = 4;
+  bool dry = 5;
+  // running | ok | failed | dry_run | skipped. 'skipped' is a document that
+  // was byte-identical to the one already installed: nothing was written and
+  // no manifest version was burned.
+  string status = 6;
+  // 'system' for a scheduled run, the operator's id when somebody pressed the
+  // button.
+  string actor = 7;
+  string document_sha = 8;
+  string report_json = 9;
+  string error = 10;
+}
+
+message ListCatalogSourcesRequest {}
+
+message ListCatalogSourcesResponse {
+  repeated CatalogSource sources = 1;
+}
+
+message CreateCatalogSourceRequest {
+  string application_slug = 1;
+  string name = 2;
+  string kind = 3;
+  string format = 4;
+  string config_json = 5;
+  int32 interval_seconds = 6;
+}
+
+message CreateCatalogSourceResponse {
+  CatalogSource source = 1;
+}
+
+message UpdateCatalogSourceRequest {
+  string id = 1;
+  string name = 2;
+  string status = 3;
+  string format = 4;
+  string config_json = 5;
+  int32 interval_seconds = 6;
+}
+
+message UpdateCatalogSourceResponse {
+  CatalogSource source = 1;
+}
+
+message DeleteCatalogSourceRequest {
+  string id = 1;
+}
+
+// Removing a source takes its run history with it. What it applied survives in
+// the audit log.
+message DeleteCatalogSourceResponse {}
+
+message RunCatalogSourceRequest {
+  string source_id = 1;
+  bool dry = 2;
+}
+
+message RunCatalogSourceResponse {
+  CatalogRun run = 1;
+}
+
+message ListCatalogRunsRequest {
+  string source_id = 1;
+  int32 limit = 2;
+}
+
+message ListCatalogRunsResponse {
+  repeated CatalogRun runs = 1;
 }
 
 message Role {
@@ -509,6 +657,10 @@ message Role {
   repeated string assignable_at = 7;
   repeated string parent_ids = 8;
   repeated string patterns = 9;
+  // Retired from the catalog: cannot be granted to anybody new, and every
+  // grant that already names it keeps working. Set when a manifest stops
+  // naming a role it owns; authorize() never reads it.
+  bool deprecated = 10;
 }
 
 message ListRolesRequest {
@@ -696,8 +848,18 @@ message ApplyManifestRequest {
   //   allowed_realm_kinds:[...]}],
   //  routes:[{priority,path_pattern,methods,effect,permission,host_pattern,
   //   scope_bindings}]}
+  //
+  // CSV carries ONE sheet per document, decided by its header: a permission
+  // sheet (resource, action, description, risk, min_assurance, requires_amr,
+  // max_auth_age) or a role sheet (role, description, permissions, patterns,
+  // allowed_realm_kinds). Routes are JSON only — a route's ordering and
+  // scope bindings do not survive being flattened into cells.
   string manifest_json = 2;
   bool dry = 3;
+  // "json" (default) or "csv". Only the sections the document declares are
+  // applied: a role sheet leaves the permission catalog and the route table
+  // exactly as they were.
+  string format = 4;
 }
 
 message ApplyManifestResponse {
@@ -752,8 +914,20 @@ service TenantAdminService {
   rpc GetCatalogVersion(GetCatalogVersionRequest) returns (GetCatalogVersionResponse);
   // Deprecated: operate on the tenant's DEFAULT sign-in page. Kept so the
   // console keeps working while it moves to the multi-page API below.
-  rpc GetSigninPage(GetSigninPageRequest) returns (GetSigninPageResponse);
-  rpc PutSigninPage(PutSigninPageRequest) returns (PutSigninPageResponse);
+  // DEPRECATED. Superseded by the AuthPage RPCs below.
+  //
+  // These read and write signin_pages, which migration 0024 replaced with
+  // auth_pages and which nothing renders from any more: a config written here
+  // is stored, audited, and never shown to anybody. They also take a shape
+  // pagecfg cannot parse, so the value cannot simply be forwarded.
+  //
+  // Use ListAuthPages / GetAuthPage / UpdateAuthPage.
+  rpc GetSigninPage(GetSigninPageRequest) returns (GetSigninPageResponse) {
+    option deprecated = true;
+  }
+  rpc PutSigninPage(PutSigninPageRequest) returns (PutSigninPageResponse) {
+    option deprecated = true;
+  }
 
   // --- sign-in / sign-out page builder ------------------------------------
   // A tenant may publish many of each. Every page has its own URL
@@ -781,6 +955,12 @@ message AuthPage {
   // flow for that application instead of rendering a form with nowhere to post.
   string application_id = 7;
   string application_slug = 8;
+  // Bound to an application OR a realm, never both — the database refuses a
+  // row carrying both (auth_pages_one_binding). A realm binding is the door
+  // that population sees: resolution is slug -> application -> realm ->
+  // tenant default.
+  string realm_id = 14;
+  string realm_code = 15;
   // The constrained token set (brand, layout, copy, links, features,
   // behavior) — never markup. Validated server-side before it is stored.
   string config_json = 9;
@@ -929,6 +1109,12 @@ message RealmCategory {
 }
 
 message ListRealmCategoriesRequest {
+  // Empty = every category the tenant has defined, across all its
+  // populations. The answer is tenant-scoped either way.
+  //
+  // identity_count is populated ONLY when a realm is named: counting belongs
+  // to a population, and doing it tenant-wide is a grouped scan of the whole
+  // directory. A caller that reads the count must ask about one realm.
   string realm_id = 1;
 }
 

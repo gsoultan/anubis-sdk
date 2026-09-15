@@ -55,7 +55,11 @@ type Server struct {
 	codes       map[string]authCode
 	grants      map[anubis.SubjectID][]GrantRow
 	scopeNodes  []ScopeNodeRow
-	platformKey string
+	// scopeNodePage is the ListScopeNodes page size. An axis is paged because
+	// a real one can hold hundreds of thousands of nodes, and a fake that
+	// answers every listing in one page hides a client that never pages.
+	scopeNodePage int
+	platformKey   string
 	// Calls counts procedure hits, so a test can assert that concurrent
 	// callers produced exactly one refresh.
 	Calls map[string]int
@@ -107,6 +111,10 @@ func NewServer(t testing.TB) *Server {
 		codes:       map[string]authCode{},
 		grants:      map[anubis.SubjectID][]GrantRow{},
 		Calls:       map[string]int{},
+		// Big enough that tests which do not care about paging never meet it,
+		// small enough that ScopeNodePageSize can drive it down to prove a
+		// client walks pages.
+		scopeNodePage: defaultScopeNodePage,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/anubis-keys.json", s.keys)

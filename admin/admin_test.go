@@ -3,6 +3,7 @@ package admin_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -190,7 +191,7 @@ func TestRolesAndTheirEffectivePermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(roles) != 1 {
+	if len(roles) != 2 {
 		t.Fatalf("got %d roles", len(roles))
 	}
 	// A role definition carries the bare manifest name; grants and tokens
@@ -200,6 +201,15 @@ func TestRolesAndTheirEffectivePermissions(t *testing.T) {
 	}
 	if got := roles[0].Qualified(); got != "billing.clerk" {
 		t.Errorf("Qualified() = %q, want billing.clerk", got)
+	}
+
+	// A role retired from the catalog still decides for the grants that name
+	// it, so it is listed — but a picker that offers it is offering a dead end.
+	if roles[0].Deprecated {
+		t.Error("clerk is live")
+	}
+	if !roles[1].Deprecated {
+		t.Error("auditor was retired from the catalog and must say so")
 	}
 
 	perms, err := c.RolePermissions(context.Background(), roles[0].ID)
@@ -228,6 +238,11 @@ func TestIdentityDecodesInt64Strings(t *testing.T) {
 	if id.Created().IsZero() || id.LastLogin().IsZero() {
 		t.Fatalf("timestamps did not decode: created=%v last=%v", id.Created(), id.LastLogin())
 	}
+	// The column has existed since migrations/0008 and nothing read it, so a
+	// console could print a dash for every identity and look right.
+	if id.RetentionDeadline().IsZero() {
+		t.Error("retention deadline did not decode — a realm with a statutory limit has one")
+	}
 }
 
 func TestScopeNodesHideArchivedUnlessAsked(t *testing.T) {
@@ -236,7 +251,7 @@ func TestScopeNodesHideArchivedUnlessAsked(t *testing.T) {
 	s.AddScopeNode(anubistest.ScopeNodeRow{ID: "org-old", Axis: "org", Name: "Old", Status: "archived"})
 	s.AddScopeNode(anubistest.ScopeNodeRow{ID: "cust-acme", Axis: "customer", Name: "Acme", Status: "active"})
 
-	live, err := c.ScopeNodes(context.Background(), admin.ScopeNodeQuery{Axis: "org"})
+	live, err := c.AllScopeNodes(context.Background(), admin.ScopeNodeQuery{Axis: "org"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +259,7 @@ func TestScopeNodesHideArchivedUnlessAsked(t *testing.T) {
 		t.Fatalf("nodes = %+v — an archived node keeps deciding but must not be offered", live)
 	}
 
-	all, err := c.ScopeNodes(context.Background(), admin.ScopeNodeQuery{Axis: "org", Archived: true})
+	all, err := c.AllScopeNodes(context.Background(), admin.ScopeNodeQuery{Axis: "org", Archived: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,6 +270,73 @@ func TestScopeNodesHideArchivedUnlessAsked(t *testing.T) {
 		if n.ID == "org-old" && !n.IsArchived() {
 			t.Error("IsArchived")
 		}
+	}
+}
+
+// TestAllScopeNodesWalksEveryPage is the regression test for a truncated
+// picker. ListScopeNodes is paged because a real axis can hold hundreds of
+// thousands of nodes; a client that reads the first page and stops renders a
+// short list, reports no error, and the user cannot find an org they hold.
+func TestAllScopeNodesWalksEveryPage(t *testing.T) {
+	s, c := start(t, operatorKey)
+	s.ScopeNodePageSize(2)
+
+	const total = 7
+	for i := 0; i < total; i++ {
+		s.AddScopeNode(anubistest.ScopeNodeRow{
+			ID: fmt.Sprintf("org-%d", i), Axis: "org",
+			Name: fmt.Sprintf("Org %d", i), Status: "active",
+		})
+	}
+
+	nodes, err := c.AllScopeNodes(context.Background(), admin.ScopeNodeQuery{Axis: "org"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != total {
+		t.Fatalf("got %d of %d nodes — the axis was silently truncated at a page boundary", len(nodes), total)
+	}
+	// 7 nodes at 2 per page is 4 requests. One request would mean the client
+	// took the first page for the whole answer.
+	if got := s.Calls["ListScopeNodes"]; got != 4 {
+		t.Errorf("ListScopeNodes called %d times, want 4", got)
+	}
+
+	seen := map[string]bool{}
+	for _, n := range nodes {
+		if seen[n.ID] {
+			t.Fatalf("node %q returned twice — paging overlapped", n.ID)
+		}
+		seen[n.ID] = true
+	}
+}
+
+// TestScopeNodesHandsBackItsPageToken keeps the single-page form usable: a
+// caller doing its own paging needs the token, and a caller that ignores it is
+// the bug AllScopeNodes exists to prevent.
+func TestScopeNodesHandsBackItsPageToken(t *testing.T) {
+	s, c := start(t, operatorKey)
+	s.ScopeNodePageSize(2)
+	for i := 0; i < 3; i++ {
+		s.AddScopeNode(anubistest.ScopeNodeRow{
+			ID: fmt.Sprintf("org-%d", i), Axis: "org", Name: "Org", Status: "active",
+		})
+	}
+
+	first, err := c.ScopeNodes(context.Background(), admin.ScopeNodeQuery{Axis: "org"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Nodes) != 2 || first.NextPage == "" {
+		t.Fatalf("first page = %d nodes, next = %q; want 2 and a token", len(first.Nodes), first.NextPage)
+	}
+
+	second, err := c.ScopeNodes(context.Background(), admin.ScopeNodeQuery{Axis: "org", Page: first.NextPage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Nodes) != 1 || second.NextPage != "" {
+		t.Fatalf("second page = %d nodes, next = %q; want 1 and no token", len(second.Nodes), second.NextPage)
 	}
 }
 
