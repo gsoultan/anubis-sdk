@@ -231,9 +231,9 @@ func (s *Server) createCatalogSource(w http.ResponseWriter, r *http.Request) {
 	if s.catalogSources == nil {
 		s.catalogSources = map[string]*CatalogSourceRow{}
 	}
-	s.seq++
+	id := s.freshID("cat", func(id string) bool { _, ok := s.catalogSources[id]; return ok })
 	row := &CatalogSourceRow{
-		ID: fmt.Sprintf("cat_%d", s.seq), ApplicationSlug: req.ApplicationSlug,
+		ID: id, ApplicationSlug: req.ApplicationSlug,
 		Name: req.Name, Kind: req.Kind, Format: req.Format, Status: "active",
 		ConfigJSON: req.ConfigJSON, IntervalSeconds: req.IntervalSeconds,
 	}

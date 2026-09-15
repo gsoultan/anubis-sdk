@@ -67,6 +67,12 @@ type Server struct {
 	authPages      map[string]*AuthPageRow
 	// manifests is the installed catalog per application slug.
 	manifests map[string]*manifestApp
+	// Provisioning.
+	tenants         map[string]*TenantRow
+	realms          map[string]*realmRow
+	applications    map[string]*ApplicationRow
+	apiKeys         map[string]*apiKeyRow
+	applicationPage int
 	// seq names things the fake creates: cat_1, run_2.
 	seq int
 	// Calls counts procedure hits, so a test can assert that concurrent
@@ -138,6 +144,7 @@ func NewServer(t testing.TB) *Server {
 	s.adminRoutes(mux)
 	s.adminConfigRoutes(mux)
 	s.manifestRoutes(mux)
+	s.provisionRoutes(mux)
 
 	s.http = httptest.NewServer(mux)
 	s.URL = s.http.URL

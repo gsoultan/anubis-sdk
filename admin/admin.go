@@ -62,9 +62,27 @@ const (
 	procListCatalogRuns     = "/anubis.v1.AuthzAdminService/ListCatalogRuns"
 	procApplyManifest       = "/anubis.v1.AuthzAdminService/ApplyManifest"
 
-	procListAuthPages  = "/anubis.v1.TenantAdminService/ListAuthPages"
-	procGetAuthPage    = "/anubis.v1.TenantAdminService/GetAuthPage"
-	procUpdateAuthPage = "/anubis.v1.TenantAdminService/UpdateAuthPage"
+	procListAuthPages      = "/anubis.v1.TenantAdminService/ListAuthPages"
+	procGetAuthPage        = "/anubis.v1.TenantAdminService/GetAuthPage"
+	procCreateAuthPage     = "/anubis.v1.TenantAdminService/CreateAuthPage"
+	procUpdateAuthPage     = "/anubis.v1.TenantAdminService/UpdateAuthPage"
+	procDeleteAuthPage     = "/anubis.v1.TenantAdminService/DeleteAuthPage"
+	procSetDefaultAuthPage = "/anubis.v1.TenantAdminService/SetDefaultAuthPage"
+
+	procListTenants        = "/anubis.v1.TenantAdminService/ListTenants"
+	procCreateTenant       = "/anubis.v1.TenantAdminService/CreateTenant"
+	procUpdateTenant       = "/anubis.v1.TenantAdminService/UpdateTenant"
+	procSetTenantStatus    = "/anubis.v1.TenantAdminService/SetTenantStatus"
+	procListRealms         = "/anubis.v1.TenantAdminService/ListRealms"
+	procCreateRealm        = "/anubis.v1.TenantAdminService/CreateRealm"
+	procUpdateRealm        = "/anubis.v1.TenantAdminService/UpdateRealm"
+	procListApplications   = "/anubis.v1.TenantAdminService/ListApplications"
+	procCreateApplication  = "/anubis.v1.TenantAdminService/CreateApplication"
+	procUpdateApplication  = "/anubis.v1.TenantAdminService/UpdateApplication"
+	procRotateClientSecret = "/anubis.v1.TenantAdminService/RotateClientSecret"
+	procListAPIKeys        = "/anubis.v1.TenantAdminService/ListApiKeys"
+	procCreateAPIKey       = "/anubis.v1.TenantAdminService/CreateApiKey"
+	procRevokeAPIKey       = "/anubis.v1.TenantAdminService/RevokeApiKey"
 )
 
 // MinScheduleInterval is the floor the server puts under any non-zero schedule,

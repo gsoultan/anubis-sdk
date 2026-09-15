@@ -85,6 +85,18 @@ First release.
     form to use rather than "invalid argument" against a value that looks
     right. `ManifestReport` is typed rather than a JSON string, and prints a
     readable summary meant for after a dry run.
+  - **Provisioning** — tenants, realms, applications and API keys, plus the
+    rest of the auth-page surface (`CreateAuthPage`, `DeleteAuthPage`,
+    `SetDefaultAuthPage`). Three values come back exactly once and cannot be
+    recovered — an application's client secret, a rotated one, and an API key
+    — so they are fields on `NewApplication` and `NewAPIKey` rather than bare
+    strings, and no listing returns them.
+
+    `RenameTenant` is named for what it does, because a tenant's slug is in
+    URLs, tokens and hosted page paths and nothing changes it. Realm codes are
+    validated separately from slugs, since a code may not contain a hyphen and
+    a slug may. `Applications` is paged and reports `Total`;
+    `AllApplications` walks it.
 - **`anubiskit/`**, go-kit middleware with HTTP, gRPC and AMQP transports
   sharing one service and endpoint layer.
 - **`anubistest/`**, an in-process server for testing integrations.

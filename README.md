@@ -199,7 +199,7 @@ credentials:
 
 | Module | Tests | |
 | :--- | ---: | :--- |
-| root (`.`, `keys`, `paseto`, `admin`, `examples`) | 101 | `go test -race ./...` |
+| root (`.`, `keys`, `paseto`, `admin`, `examples`) | 110 | `go test -race ./...` |
 | `anubiskit` (HTTP, gRPC, AMQP) | 21 | `cd anubiskit && go test -race ./...` |
 
 Two modules, one command:
@@ -285,8 +285,44 @@ trip. An auth page binds to an application **or** a realm, never both, so
 answer with a constraint name.
 
 A catalog source's application is pinned when it is created, which is why
-`CatalogSourceUpdate` has no field for it. The rest of the surface — creating
-tenants — is not wrapped.
+`CatalogSourceUpdate` has no field for it.
+
+### Provisioning: standing a tenant up
+
+Each step names the one before it, so the order is the API:
+
+```go
+ten, _ := ops.CreateTenant(ctx, "impack", "Impack Ltd")       // slug is permanent
+realm, _ := ops.CreateRealm(ctx, admin.Realm{                  // a population
+    Code: "employees", Kind: admin.RealmInternal,
+    SessionTTL: "8 hours",                                     // interval text, not a Duration
+})
+app, _ := ops.CreateApplication(ctx, admin.Application{         // a relying party
+    Slug: "billing-api", Kind: admin.AppService,
+})
+app.ClientSecret                                               // shown ONCE
+ops.ApplyManifest(ctx, "billing-api", m)                        // its permissions and roles
+key, _ := ops.CreateAPIKey(ctx, "billing back end", time.Time{}) // shown ONCE
+```
+
+**Three values are returned exactly once and cannot be recovered**: an
+application's client secret, a rotated one, and an API key. Only a hash is
+stored, so a caller that discards the response has lost the value — the remedy
+is rotation, which invalidates whatever the old one was already deployed into.
+They are fields on `NewApplication` and `NewAPIKey` rather than bare strings so
+the documentation sits where you use them, and no listing ever returns one.
+
+`RenameTenant` is named for what it does: a tenant's slug is in URLs, tokens
+and every hosted page path, so nothing changes it. Realm codes are stricter
+than slugs — no hyphens — and the SDK says so rather than letting the server
+answer "invalid argument". `Applications` is paged and carries `Total`, so a
+page can say "20 of 138" instead of implying it is everything;
+`AllApplications` walks it.
+
+One field is worth reading twice before setting: `Realm.FactorEnrolmentDeadline`
+is a rollout switch, not a flag. Before the date, sign-in works and warns;
+on and after it, a member who has not enrolled the required factors gets an
+enrolment challenge instead of a session.
 
 ### Manifests: where permissions come from
 
