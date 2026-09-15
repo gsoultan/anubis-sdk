@@ -60,6 +60,13 @@ type Server struct {
 	// answers every listing in one page hides a client that never pages.
 	scopeNodePage int
 	platformKey   string
+	// The configuration half of the admin plane.
+	catalogSources map[string]*CatalogSourceRow
+	catalogRuns    map[string][]map[string]any
+	syncSources    map[string]*SyncSourceRow
+	authPages      map[string]*AuthPageRow
+	// seq names things the fake creates: cat_1, run_2.
+	seq int
 	// Calls counts procedure hits, so a test can assert that concurrent
 	// callers produced exactly one refresh.
 	Calls map[string]int
@@ -127,6 +134,7 @@ func NewServer(t testing.TB) *Server {
 	mux.HandleFunc("/v1/authorize", s.browserAuthorize)
 	mux.HandleFunc("/v1/token", s.tokenExchange)
 	s.adminRoutes(mux)
+	s.adminConfigRoutes(mux)
 
 	s.http = httptest.NewServer(mux)
 	s.URL = s.http.URL

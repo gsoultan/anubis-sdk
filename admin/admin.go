@@ -1,5 +1,6 @@
-// Package admin reads the Anubis administration plane: identities, grants,
-// roles and scope nodes.
+// Package admin reads and configures the Anubis administration plane:
+// identities, grants, roles, scope nodes, the sources those are synced from,
+// and the sign-in pages a tenant serves.
 //
 // # This needs an operator, not an application
 //
@@ -31,6 +32,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,7 +51,28 @@ const (
 	procListScopeNodes  = "/anubis.v1.ScopeAdminService/ListScopeNodes"
 	procScopeAncestors  = "/anubis.v1.ScopeAdminService/ScopeAncestors"
 	procListScopeAxes   = "/anubis.v1.ScopeAdminService/ListScopeAxes"
+
+	procSetSyncSchedule = "/anubis.v1.ScopeAdminService/SetSyncSchedule"
+
+	procListCatalogSources  = "/anubis.v1.AuthzAdminService/ListCatalogSources"
+	procCreateCatalogSource = "/anubis.v1.AuthzAdminService/CreateCatalogSource"
+	procUpdateCatalogSource = "/anubis.v1.AuthzAdminService/UpdateCatalogSource"
+	procDeleteCatalogSource = "/anubis.v1.AuthzAdminService/DeleteCatalogSource"
+	procRunCatalogSource    = "/anubis.v1.AuthzAdminService/RunCatalogSource"
+	procListCatalogRuns     = "/anubis.v1.AuthzAdminService/ListCatalogRuns"
+
+	procListAuthPages  = "/anubis.v1.TenantAdminService/ListAuthPages"
+	procGetAuthPage    = "/anubis.v1.TenantAdminService/GetAuthPage"
+	procUpdateAuthPage = "/anubis.v1.TenantAdminService/UpdateAuthPage"
 )
+
+// MinScheduleInterval is the floor the server puts under any non-zero schedule,
+// for both a scope sync source and a catalog source. A structure is an org
+// chart and a catalog is a document a team edits; anything faster is polling
+// somebody else's system for rows that did not move.
+//
+// Zero always means manual: the scheduler will never pick the source up.
+const MinScheduleInterval = 5 * time.Minute
 
 // ErrNotPlatformOperator means the credential is a tenant's, not an operator's.
 //
@@ -544,6 +567,389 @@ func (c *Client) AllScopeNodes(ctx context.Context, q ScopeNodeQuery) ([]ScopeNo
 	}
 }
 
+// ---- catalog sources ------------------------------------------------------
+
+// CatalogSource is a configured origin for ONE application's catalog — the
+// permissions and roles it declares — read on a schedule when nobody is
+// pushing them.
+//
+// The application is a pin, not a parameter: it is fixed when the source is
+// created, and [Client.UpdateCatalogSource] has no field for it because the
+// server ignores any attempt to move one.
+type CatalogSource struct {
+	ID              string `json:"id"`
+	ApplicationSlug string `json:"applicationSlug"`
+	Name            string `json:"name"`
+	Kind            string `json:"kind"`   // http
+	Format          string `json:"format"` // json | csv
+	Status          string `json:"status"` // active | disabled
+	// ConfigJSON holds the kind's own settings — for http,
+	// {"url":…, "auth_header":…}.
+	ConfigJSON      string `json:"configJson"`
+	IntervalSeconds int    `json:"intervalSeconds"`
+	LastRunAt       epoch  `json:"lastRunAt"`
+	NextRunAt       epoch  `json:"nextRunAt"`
+	// LastStatus is how the most recent attempt ended — ok, failed, skipped,
+	// dry_run, running — or empty if it has never run. It rides on the source
+	// so a listing can show a broken feed without a request per row.
+	LastStatus string `json:"lastStatus"`
+}
+
+// Every reports how often the source is scheduled. Zero means manual: the
+// scheduler will never pick it up.
+func (s CatalogSource) Every() time.Duration {
+	return time.Duration(s.IntervalSeconds) * time.Second
+}
+
+// IsManual reports whether the source only runs when somebody asks.
+func (s CatalogSource) IsManual() bool { return s.IntervalSeconds == 0 }
+
+// LastRun is when the source was last read. Zero if never.
+func (s CatalogSource) LastRun() time.Time { return s.LastRunAt.time() }
+
+// NextRun is when the scheduler will read it next. Zero for a manual source.
+func (s CatalogSource) NextRun() time.Time { return s.NextRunAt.time() }
+
+// IsBroken reports whether the most recent run failed. A source that has never
+// run is not broken.
+func (s CatalogSource) IsBroken() bool { return s.LastStatus == "failed" }
+
+// CatalogRun is one attempt to read a source and apply what it returned.
+type CatalogRun struct {
+	ID        string `json:"id"`
+	SourceID  string `json:"sourceId"`
+	StartedAt epoch  `json:"startedAt"`
+	// FinishedAt is zero while a run is in flight — or if the process died
+	// mid-run, and a row stuck like that is itself the diagnosis.
+	FinishedAt epoch `json:"finishedAt"`
+	Dry        bool  `json:"dry"`
+	// Status is running | ok | failed | dry_run | skipped. "skipped" means the
+	// document was byte-identical to the one already installed: nothing was
+	// written and no manifest version was burned.
+	Status string `json:"status"`
+	// Actor is "system" for a scheduled run, or the operator's id when
+	// somebody pressed the button.
+	Actor       string `json:"actor"`
+	DocumentSHA string `json:"documentSha"`
+	ReportJSON  string `json:"reportJson"`
+	Error       string `json:"error"`
+}
+
+// Started is when the run began.
+func (r CatalogRun) Started() time.Time { return r.StartedAt.time() }
+
+// Finished is when it ended. Zero while in flight.
+func (r CatalogRun) Finished() time.Time { return r.FinishedAt.time() }
+
+// InFlight reports whether the run has not finished. A run left like this by a
+// process that died reads the same way, which is the intent.
+func (r CatalogRun) InFlight() bool { return r.FinishedAt.time().IsZero() }
+
+// Applied reports whether the run wrote anything. A dry run and a skipped run
+// both succeeded without changing the catalog.
+func (r CatalogRun) Applied() bool { return r.Status == "ok" }
+
+// CatalogSources lists every configured catalog source for the tenant.
+func (c *Client) CatalogSources(ctx context.Context) ([]CatalogSource, error) {
+	var out struct {
+		Sources []CatalogSource `json:"sources"`
+	}
+	if err := c.call(ctx, procListCatalogSources, map[string]any{}, &out); err != nil {
+		return nil, err
+	}
+	return out.Sources, nil
+}
+
+// NewCatalogSource describes a source to create.
+type NewCatalogSource struct {
+	// ApplicationSlug is pinned at creation and cannot be changed afterwards.
+	ApplicationSlug string
+	Name            string
+	Kind            string // http
+	Format          string // json | csv; empty means json
+	ConfigJSON      string
+	// Every is how often to read it. Zero means manual. Anything else must be
+	// at least MinScheduleInterval.
+	Every time.Duration
+}
+
+// CreateCatalogSource configures a new source.
+func (c *Client) CreateCatalogSource(ctx context.Context, s NewCatalogSource) (*CatalogSource, error) {
+	secs, err := scheduleSeconds(s.Every)
+	if err != nil {
+		return nil, err
+	}
+	if s.ApplicationSlug == "" {
+		return nil, fmt.Errorf("anubis/admin: a catalog source needs an application; it is pinned at creation and cannot be moved later")
+	}
+	req := map[string]any{
+		"application_slug": s.ApplicationSlug,
+		"name":             s.Name,
+		"kind":             s.Kind,
+		"format":           s.Format,
+		"config_json":      s.ConfigJSON,
+		"interval_seconds": secs,
+	}
+	var out struct {
+		Source *CatalogSource `json:"source"`
+	}
+	if err := c.call(ctx, procCreateCatalogSource, req, &out); err != nil {
+		return nil, err
+	}
+	if out.Source == nil {
+		return nil, fmt.Errorf("anubis/admin: the server created no catalog source")
+	}
+	return out.Source, nil
+}
+
+// CatalogSourceUpdate changes a source. There is no application field: the
+// application is pinned at creation.
+type CatalogSourceUpdate struct {
+	ID         string
+	Name       string
+	Status     string // active | disabled
+	Format     string
+	ConfigJSON string
+	// Every is how often to read it. Zero means manual. Anything else must be
+	// at least MinScheduleInterval.
+	Every time.Duration
+}
+
+// UpdateCatalogSource replaces a source's configuration.
+//
+// This writes config wholesale. To change only when a source runs, use
+// [Client.SetSyncSchedule] for a scope sync source; a catalog source carries
+// its schedule here.
+func (c *Client) UpdateCatalogSource(ctx context.Context, u CatalogSourceUpdate) (*CatalogSource, error) {
+	secs, err := scheduleSeconds(u.Every)
+	if err != nil {
+		return nil, err
+	}
+	req := map[string]any{
+		"id": u.ID, "name": u.Name, "status": u.Status,
+		"format": u.Format, "config_json": u.ConfigJSON,
+		"interval_seconds": secs,
+	}
+	var out struct {
+		Source *CatalogSource `json:"source"`
+	}
+	if err := c.call(ctx, procUpdateCatalogSource, req, &out); err != nil {
+		return nil, err
+	}
+	if out.Source == nil {
+		return nil, fmt.Errorf("anubis/admin: no catalog source %q", u.ID)
+	}
+	return out.Source, nil
+}
+
+// DeleteCatalogSource removes a source and its run history. What the runs
+// applied survives in the audit log.
+func (c *Client) DeleteCatalogSource(ctx context.Context, id string) error {
+	var out struct{}
+	return c.call(ctx, procDeleteCatalogSource, map[string]any{"id": id}, &out)
+}
+
+// RunCatalogSource reads a source now, rather than waiting for the scheduler.
+//
+// A dry run reports what it would do and writes nothing — which is the call to
+// make first against a source nobody has run before.
+func (c *Client) RunCatalogSource(ctx context.Context, sourceID string, dry bool) (*CatalogRun, error) {
+	var out struct {
+		Run *CatalogRun `json:"run"`
+	}
+	req := map[string]any{"source_id": sourceID, "dry": dry}
+	if err := c.call(ctx, procRunCatalogSource, req, &out); err != nil {
+		return nil, err
+	}
+	if out.Run == nil {
+		return nil, fmt.Errorf("anubis/admin: no run started for catalog source %q", sourceID)
+	}
+	return out.Run, nil
+}
+
+// CatalogRuns lists a source's run history, most recent first. A limit of zero
+// leaves the count to the server.
+func (c *Client) CatalogRuns(ctx context.Context, sourceID string, limit int) ([]CatalogRun, error) {
+	var out struct {
+		Runs []CatalogRun `json:"runs"`
+	}
+	req := map[string]any{"source_id": sourceID, "limit": limit}
+	if err := c.call(ctx, procListCatalogRuns, req, &out); err != nil {
+		return nil, err
+	}
+	return out.Runs, nil
+}
+
+// ---- scope sync schedules -------------------------------------------------
+
+// SyncSource is where a scope axis's nodes are read from — an org chart that
+// lives in somebody else's system.
+type SyncSource struct {
+	ID              string      `json:"id"`
+	Axis            anubis.Axis `json:"axis"`
+	Kind            string      `json:"kind"` // http | db_query | db_table
+	Status          string      `json:"status"`
+	ConfigJSON      string      `json:"configJson"`
+	LastRunAt       epoch       `json:"lastRunAt"`
+	IntervalSeconds int         `json:"intervalSeconds"`
+	NextRunAt       epoch       `json:"nextRunAt"`
+}
+
+// Every reports how often the source is scheduled. Zero means manual.
+func (s SyncSource) Every() time.Duration {
+	return time.Duration(s.IntervalSeconds) * time.Second
+}
+
+// IsManual reports whether the source only runs when somebody asks.
+func (s SyncSource) IsManual() bool { return s.IntervalSeconds == 0 }
+
+// LastRun is when the axis was last synced. Zero if never.
+func (s SyncSource) LastRun() time.Time { return s.LastRunAt.time() }
+
+// NextRun is when the scheduler will sync it next. Zero for a manual source.
+func (s SyncSource) NextRun() time.Time { return s.NextRunAt.time() }
+
+// SetSyncSchedule changes WHEN a scope sync source runs, and nothing else.
+//
+// It is separate from updating the source because that replaces configuration
+// wholesale, and a client is never sent a source's dsn or auth header to send
+// back — so a read-modify-write through the update call would blank them.
+//
+// Zero means manual: the scheduler will never pick the source up. Anything
+// else must be at least [MinScheduleInterval].
+func (c *Client) SetSyncSchedule(ctx context.Context, sourceID string, every time.Duration) (*SyncSource, error) {
+	secs, err := scheduleSeconds(every)
+	if err != nil {
+		return nil, err
+	}
+	req := map[string]any{"source_id": sourceID, "interval_seconds": secs}
+	var out struct {
+		Source *SyncSource `json:"source"`
+	}
+	if err := c.call(ctx, procSetSyncSchedule, req, &out); err != nil {
+		return nil, err
+	}
+	if out.Source == nil {
+		return nil, fmt.Errorf("anubis/admin: no sync source %q", sourceID)
+	}
+	return out.Source, nil
+}
+
+// scheduleSeconds converts a schedule to the wire's int32 seconds, refusing an
+// interval the server would refuse anyway — with a message that says what the
+// floor is, rather than a round trip that says "invalid argument".
+func scheduleSeconds(every time.Duration) (int, error) {
+	if every == 0 {
+		return 0, nil
+	}
+	if every < 0 {
+		return 0, fmt.Errorf("anubis/admin: a schedule cannot be negative; use 0 for manual")
+	}
+	if every < MinScheduleInterval {
+		return 0, fmt.Errorf(
+			"anubis/admin: schedule %s is below the %s floor; use 0 for manual, or a longer interval",
+			every, MinScheduleInterval)
+	}
+	return int(every / time.Second), nil
+}
+
+// ---- auth pages -----------------------------------------------------------
+
+// ErrAuthPageBinding means a page named both an application and a realm.
+//
+// The database refuses the row (auth_pages_one_binding), so this is caught
+// here rather than spent on a round trip: a page is the door ONE population
+// walks through, and naming two is not a stricter binding, it is an undefined
+// one.
+var ErrAuthPageBinding = errors.New(
+	"anubis/admin: an auth page binds to an application OR a realm, never both")
+
+// AuthPage is a sign-in or sign-out page a tenant serves.
+//
+// A page is bound to an application or to a realm, never both. A realm binding
+// is the door that whole population sees; resolution runs slug → application →
+// realm → tenant default.
+type AuthPage struct {
+	ID     string `json:"id"`
+	Kind   string `json:"kind"`   // signin | signout
+	Slug   string `json:"slug"`   // the URL segment: /p/{tenant}/{kind}/{slug}
+	Name   string `json:"name"`   // admin-facing label
+	Status string `json:"status"` // active | disabled
+	// IsDefault marks the page a population falls back to.
+	IsDefault       bool   `json:"isDefault"`
+	ApplicationID   string `json:"applicationId"`
+	ApplicationSlug string `json:"applicationSlug"`
+	RealmID         string `json:"realmId"`
+	RealmCode       string `json:"realmCode"`
+	ConfigJSON      string `json:"configJson"`
+	CreatedAt       epoch  `json:"createdAt"`
+	UpdatedAt       epoch  `json:"updatedAt"`
+	// URL is where the page is actually served. Read-only.
+	URL string `json:"url"`
+}
+
+// Created is when the page was created.
+func (p AuthPage) Created() time.Time { return p.CreatedAt.time() }
+
+// Updated is when it was last changed.
+func (p AuthPage) Updated() time.Time { return p.UpdatedAt.time() }
+
+// BoundToRealm reports whether this page is a whole population's door rather
+// than one application's.
+func (p AuthPage) BoundToRealm() bool { return p.RealmID != "" || p.RealmCode != "" }
+
+// BoundToApplication reports whether the page belongs to one application.
+func (p AuthPage) BoundToApplication() bool {
+	return p.ApplicationID != "" || p.ApplicationSlug != ""
+}
+
+// AuthPages lists the tenant's pages. An empty kind returns both signin and
+// signout pages.
+func (c *Client) AuthPages(ctx context.Context, kind string) ([]AuthPage, error) {
+	var out struct {
+		Pages []AuthPage `json:"pages"`
+	}
+	if err := c.call(ctx, procListAuthPages, map[string]any{"kind": kind}, &out); err != nil {
+		return nil, err
+	}
+	return out.Pages, nil
+}
+
+// AuthPage reads one page.
+func (c *Client) AuthPage(ctx context.Context, id string) (*AuthPage, error) {
+	var out struct {
+		Page *AuthPage `json:"page"`
+	}
+	if err := c.call(ctx, procGetAuthPage, map[string]any{"id": id}, &out); err != nil {
+		return nil, err
+	}
+	if out.Page == nil {
+		return nil, fmt.Errorf("anubis/admin: no auth page %q", id)
+	}
+	return out.Page, nil
+}
+
+// UpdateAuthPage writes a page back.
+//
+// It refuses a page that names both an application and a realm with
+// [ErrAuthPageBinding], because the database refuses that row and the error it
+// returns does not say which of the two bindings was the accident.
+func (c *Client) UpdateAuthPage(ctx context.Context, p AuthPage) (*AuthPage, error) {
+	if p.BoundToApplication() && p.BoundToRealm() {
+		return nil, ErrAuthPageBinding
+	}
+	var out struct {
+		Page *AuthPage `json:"page"`
+	}
+	if err := c.call(ctx, procUpdateAuthPage, map[string]any{"page": p}, &out); err != nil {
+		return nil, err
+	}
+	if out.Page == nil {
+		return nil, fmt.Errorf("anubis/admin: no auth page %q", p.ID)
+	}
+	return out.Page, nil
+}
+
 // ---- small helpers --------------------------------------------------------
 
 // epoch decodes a proto int64, which protojson renders as a JSON string.
@@ -561,6 +967,11 @@ func (e *epoch) UnmarshalJSON(b []byte) error {
 	}
 	*e = epoch(n)
 	return nil
+}
+
+// MarshalJSON writes the protojson form: int64 is a JSON string on the wire.
+func (e epoch) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + strconv.FormatInt(int64(e), 10) + `"`), nil
 }
 
 func (e epoch) time() time.Time {

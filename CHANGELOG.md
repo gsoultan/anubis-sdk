@@ -46,6 +46,23 @@ First release.
   - `Identity.RetentionDeadline()` reads the statutory retention limit's
     deadline, and `Role.Deprecated` marks a role retired from the catalog —
     still deciding for the grants that name it, but a dead end in a picker.
+  - **Catalog sources** — `CatalogSources`, `CreateCatalogSource`,
+    `UpdateCatalogSource`, `DeleteCatalogSource`, `RunCatalogSource`,
+    `CatalogRuns`: where an application's permissions and roles are read from
+    when nobody is pushing them. An application is pinned at creation, so
+    `CatalogSourceUpdate` has no field for it. Run a source dry first — it
+    reports and writes nothing, and does not become the source's last status.
+  - **`SetSyncSchedule`** changes *when* a scope sync source runs and nothing
+    else. Updating a source replaces its config wholesale, and a client is
+    never sent that source's dsn or auth header to send back, so a
+    read-modify-write through the update call would blank them.
+  - **Auth pages** — `AuthPages`, `AuthPage`, `UpdateAuthPage`. A page binds
+    to an application **or** a realm, never both; naming two is refused here
+    with `ErrAuthPageBinding` rather than by a database constraint whose error
+    does not say which binding was the accident.
+  - Schedules are zero (manual) or at least `MinScheduleInterval`. Anything
+    shorter is refused without a round trip, with a message that says what the
+    floor is.
 - **`anubiskit/`**, go-kit middleware with HTTP, gRPC and AMQP transports
   sharing one service and endpoint layer.
 - **`anubistest/`**, an in-process server for testing integrations.

@@ -146,11 +146,11 @@ you registered.
 
 ```
 .                 Go: the offline half and the client, one module, no dependencies
-admin/            grants, roles and scope nodes — operator credentials only
+admin/            grants, roles, scope nodes and their sources — operators only
 anubistest/       an in-process Anubis for tests, integration plane and admin
 anubiskit/        go-kit adapter for HTTP, gRPC and AMQP — a SEPARATE module
 examples/         a worked browser application, end-to-end tested
-proto/anubis/v1/  the vendored contract, the single source for codegen
+proto/anubis/v1/  the vendored contract, for reference — nothing generates
 docs/WIRE.md      the contract in prose, for people not using an SDK
 docs/MIGRATION.md pkg/anubis → anubis-sdk, and the dependency inversion
 DESIGN.md         why the SDK is shaped this way
@@ -199,7 +199,7 @@ credentials:
 
 | Module | Tests | |
 | :--- | ---: | :--- |
-| root (`.`, `keys`, `paseto`, `admin`, `examples`) | 79 | `go test -race ./...` |
+| root (`.`, `keys`, `paseto`, `admin`, `examples`) | 89 | `go test -race ./...` |
 | `anubiskit` (HTTP, gRPC, AMQP) | 21 | `cd anubiskit && go test -race ./...` |
 
 Two modules, one command:
@@ -263,5 +263,27 @@ accepts.
 `admin` is a package, not a separate module: hand-written against the wire it
 needs nothing but the standard library, so isolating it buys nothing. It stays
 separate so the 120-procedure surface is not in the package a payments service
-embeds. The rest of that surface — creating tenants, applying manifests,
-syncing scope sources — is not wrapped yet.
+embeds.
+
+It also configures where roles and scope nodes are read from, and which door a
+population signs in through:
+
+```go
+ops.CatalogSources(ctx)                        // where an app's roles are read from
+ops.RunCatalogSource(ctx, id, true)            // dry run first: reports, writes nothing
+ops.SetSyncSchedule(ctx, "syn_1", 6*time.Hour) // when an org chart is re-read
+ops.AuthPages(ctx, "signin")                   // the sign-in pages a tenant serves
+```
+
+Three rules there are enforced here rather than discovered:
+`SetSyncSchedule` changes *when* a source runs and nothing else, because the
+update call replaces config wholesale and a client is never sent a source's dsn
+or auth header to send back. A schedule is either zero — manual — or at least
+`admin.MinScheduleInterval`, and anything shorter is refused without a round
+trip. An auth page binds to an application **or** a realm, never both, so
+`UpdateAuthPage` returns `ErrAuthPageBinding` rather than letting the database
+answer with a constraint name.
+
+A catalog source's application is pinned when it is created, which is why
+`CatalogSourceUpdate` has no field for it. The rest of the surface — creating
+tenants, applying manifests — is not wrapped.
