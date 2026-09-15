@@ -4,12 +4,18 @@ name: release
 # version lives in a manifest that could drift from one, and there is no
 # registry to push to or credential to hold. `git push --tags` publishes.
 #
+# Two tag shapes, because there are two modules:
+#
+#   v0.1.0             the root module, github.com/gsoultan/anubis-sdk
+#   anubiskit/v0.1.0   the nested one, .../anubiskit
+#
 # What a tag alone does not do is run the suite at the commit being released,
-# or write down what changed. That is this workflow.
+# check that the module being tagged can actually be consumed, or write down
+# what changed. That is this workflow.
 
 on:
   push:
-    tags: ['v*']
+    tags: ['v*', 'anubiskit/v*']
 
 permissions:
   contents: read
@@ -20,20 +26,67 @@ jobs:
   verify:
     uses: ./.github/workflows/ci.yml
 
+  # go.work makes anubiskit build against the root module in the working tree,
+  # which is what a developer wants and is also why CI cannot see whether
+  # anubiskit's own go.mod resolves. It did not, for the whole of v0.1.0: it
+  # required anubis-sdk v0.0.0 behind a local replace, and replace directives
+  # are ignored in a consumed module, so the tag would not have resolved for
+  # anybody.
+  #
+  # GOWORK=off is the consumer's view. This runs only on a tag rather than on
+  # every push, because the honest cost of a released nested module is that its
+  # require has to name a version that EXISTS — and paying that on every branch
+  # would block any root change anubiskit uses until the root is released.
+  consumable:
+    name: anubiskit resolves standalone
+    if: startsWith(github.ref_name, 'anubiskit/')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: anubiskit
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: anubiskit/go.mod
+          cache-dependency-path: anubiskit/go.sum
+      - name: no replace directives
+        # A replace is ignored downstream, so one here is a module that builds
+        # for us and not for anybody else.
+        run: |
+          if grep -qE '^\s*replace' go.mod; then
+            echo "::error::anubiskit/go.mod has a replace; it would be ignored by consumers"
+            grep -nE '^\s*replace' go.mod; exit 1
+          fi
+      - name: build and test as a consumer
+        env:
+          GOWORK: off
+        run: go build ./... && go test -race -count=1 ./...
+
   github-release:
     name: github release
-    needs: [verify]
+    # consumable is skipped for a root tag, and a skipped dependency would skip
+    # this job too — hence always() plus an explicit reading of each result.
+    needs: [verify, consumable]
+    if: >-
+      always()
+      && needs.verify.result == 'success'
+      && (needs.consumable.result == 'success' || needs.consumable.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: notes from CHANGELOG
+        # The section is named as the tag is, minus a leading "v" when the tag
+        # has one: v0.1.0 -> "## [0.1.0]", anubiskit/v0.1.0 ->
+        # "## [anubiskit/v0.1.0]". Matched by prefix rather than by regex,
+        # since a version string is full of characters a regex would read.
         run: |
           awk -v v="${GITHUB_REF_NAME#v}" '
-            $0 ~ "^## \\[" v "\\]" { on = 1; next }
-            on && /^## \[/         { exit }
-            on                     { print }
+            index($0, "## [" v "]") == 1 { on = 1; next }
+            on && index($0, "## [") == 1 { exit }
+            on                           { print }
           ' CHANGELOG.md > notes.md
           if [ ! -s notes.md ]; then
             echo "::error::CHANGELOG.md has no section for ${GITHUB_REF_NAME}"

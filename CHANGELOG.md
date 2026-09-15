@@ -5,6 +5,44 @@ Format follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html), and while the major
 version is 0 the API may still move.
 
+## [anubiskit/v0.1.0] — 2026-09-15
+
+First release of the go-kit module, `github.com/gsoultan/anubis-sdk/anubiskit`.
+
+The code shipped with v0.1.0 and is unchanged. What was wrong was the module,
+not the middleware: it required `github.com/gsoultan/anubis-sdk v0.0.0` behind
+a local `replace`, and **a replace directive is ignored in a module that is
+being consumed** — so a tag would have resolved to a version that does not
+exist and failed for everybody but us. Nothing was published until there was a
+root release to require, which is why this comes after v0.1.0 rather than with
+it.
+
+### Fixed
+
+- `require github.com/gsoultan/anubis-sdk v0.1.0`, and both `replace`
+  directives removed.
+- A second `replace` pinned `google.golang.org/genproto`, because go-kit
+  v0.13.0 requires the pre-split monolith, which still carries `googleapis/rpc`
+  and makes `grpc/status` ambiguous. That is real — but only inside a
+  **workspace**, which resolves one build list across every module in it.
+  Standalone the ambiguity does not arise: `google.golang.org/genproto/
+  googleapis/rpc` is a longer module path and wins for the packages beneath it.
+
+  So the pin moved to `go.work`, where it belongs — it is a property of this
+  workspace, not of the published module, and a `replace` in a published module
+  is ignored by consumers regardless. Both views are verified: the workspace
+  build via `scripts/ci/local.sh`, and the consumer build with `GOWORK=off` on
+  go1.26.6 and go1.27.1.
+- `release.yml` now gates an `anubiskit/*` tag on the module resolving with
+  `GOWORK=off`. `go.work` makes anubiskit build against the root module in the
+  working tree — which is what a developer wants, and exactly why CI could not
+  see that its own `go.mod` was broken. It runs on tags rather than on every
+  push, because the real cost of a released nested module is that its require
+  must name a version that exists, and paying that on every branch would block
+  any root change anubiskit uses until the root is released.
+- `actions/checkout` and `actions/setup-go` moved to v7; the pinned majors were
+  running on the deprecated Node 20 runner.
+
 ## [0.1.0] — 2026-09-15
 
 First release.
@@ -127,4 +165,5 @@ They were a convenience, not the interface, and removing them took only
 release machinery with it — three CI jobs, the npm publish job, the
 version-agreement check and the Packagist split-mirror script.
 
+[anubiskit/v0.1.0]: https://github.com/gsoultan/anubis-sdk/releases/tag/anubiskit%2Fv0.1.0
 [0.1.0]: https://github.com/gsoultan/anubis-sdk/releases/tag/v0.1.0

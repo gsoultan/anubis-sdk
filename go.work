@@ -4,3 +4,15 @@ use (
 	.
 	./anubiskit
 )
+
+// go-kit v0.13.0 requires the pre-split google.golang.org/genproto, which still
+// carries googleapis/rpc. Standalone that is harmless — the longer module path,
+// google.golang.org/genproto/googleapis/rpc, wins for the packages beneath it —
+// but a workspace resolves one build list across every module in it, and there
+// grpc/status finds the package in both and refuses to choose.
+//
+// So the pin lives HERE rather than in anubiskit/go.mod. It is a property of
+// this workspace, not of the published module, and a replace in a published
+// module is ignored by consumers anyway. Moving it out is what let anubiskit be
+// tagged at all; release.yml checks the module still resolves with GOWORK=off.
+replace google.golang.org/genproto => google.golang.org/genproto v0.0.0-20260810153831-ec0a7760b754
