@@ -60,6 +60,7 @@ const (
 	procDeleteCatalogSource = "/anubis.v1.AuthzAdminService/DeleteCatalogSource"
 	procRunCatalogSource    = "/anubis.v1.AuthzAdminService/RunCatalogSource"
 	procListCatalogRuns     = "/anubis.v1.AuthzAdminService/ListCatalogRuns"
+	procApplyManifest       = "/anubis.v1.AuthzAdminService/ApplyManifest"
 
 	procListAuthPages  = "/anubis.v1.TenantAdminService/ListAuthPages"
 	procGetAuthPage    = "/anubis.v1.TenantAdminService/GetAuthPage"

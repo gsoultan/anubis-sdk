@@ -199,7 +199,7 @@ credentials:
 
 | Module | Tests | |
 | :--- | ---: | :--- |
-| root (`.`, `keys`, `paseto`, `admin`, `examples`) | 89 | `go test -race ./...` |
+| root (`.`, `keys`, `paseto`, `admin`, `examples`) | 101 | `go test -race ./...` |
 | `anubiskit` (HTTP, gRPC, AMQP) | 21 | `cd anubiskit && go test -race ./...` |
 
 Two modules, one command:
@@ -286,4 +286,69 @@ answer with a constraint name.
 
 A catalog source's application is pinned when it is created, which is why
 `CatalogSourceUpdate` has no field for it. The rest of the surface — creating
-tenants, applying manifests — is not wrapped.
+tenants — is not wrapped.
+
+### Manifests: where permissions come from
+
+Nobody types `billing:invoice:approve` into a console. An application
+*declares* the permissions it has, the roles that bundle them, and the route
+rules that say which paths need which permission. That declaration is a
+**manifest**, and applying one is a reconcile — the server diffs the document
+against what is installed and moves the catalog to match, the way a migration
+does.
+
+A manifest has three sections, and **they are independent**. What decides
+whether a section is touched is whether the document *declares* it — not
+whether it has content:
+
+```go
+m := admin.Manifest{}.WithRoles(
+    admin.ManifestRole{Name: "clerk", Permissions: []string{"invoice:approve"}},
+)
+// {"roles":[{"name":"clerk","permissions":["invoice:approve"]}]}
+```
+
+That document changes roles and touches nothing else. It is **not** saying the
+application has no permissions and no routes — an absent key means "leave that
+alone", which is why a CSV export of roles is a legal manifest.
+
+Inside a declared section, whatever the document stops naming is retired
+rather than removed. Except routes:
+
+| Section | Named | Stopped naming |
+| :--- | :--- | :--- |
+| `permissions` | upserted | **deprecated** — never deleted, nobody loses one |
+| `roles` | upserted | **retired** — existing grants keep deciding, nobody new can be granted |
+| `routes` | — | the whole table is **replaced** by what the document says |
+
+That asymmetry is the sharp edge. The server refuses a `permissions` or `roles`
+section that is present but empty — it will not deprecate a whole catalog in
+one apply. **The route table has no such rail**: an empty routes section
+empties it. So `WithRoutes()` with no routes is refused here, and emptying the
+table on purpose is spelled `ClearRoutes()`.
+
+Run a dry run first and print it. The server executes the whole apply in a
+transaction it then rolls back, so the report is the real diff:
+
+```go
+rep, _ := ops.DryRunManifest(ctx, "billing", m)
+fmt.Print(rep)
+```
+
+```
+dry run — nothing was written
+  permissions  1 applied, 1 deprecated (kept, not deleted)
+  roles        1 applied, 1 retired (existing grants keep working)
+  routes       not declared — left alone
+```
+
+One more trap, caught locally because the server's own code calls it out:
+roles and routes name permissions as `resource:action` — **without** the
+application slug, since the manifest is already scoped to one application.
+Write `invoice:approve`, not `billing:invoice:approve`. `Validate` rejects the
+full key and tells you which form to use.
+
+Have a JSON file or a spreadsheet export already? `ApplyManifestDocument` takes
+the bytes and a format (`json` or `csv`). A CSV carries one section per file,
+decided by its header; routes are JSON only, because a route's ordering and
+scope bindings do not survive being flattened into cells.

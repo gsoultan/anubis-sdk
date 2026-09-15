@@ -63,6 +63,28 @@ First release.
   - Schedules are zero (manual) or at least `MinScheduleInterval`. Anything
     shorter is refused without a round trip, with a message that says what the
     floor is.
+  - **Manifests** — `ApplyManifest`, `DryRunManifest`,
+    `ApplyManifestDocument`, and a `Manifest` builder. A manifest is an
+    application's catalog: its permissions, the roles that bundle them, and
+    the route rules. Applying one reconciles rather than inserts.
+
+    The section a document *declares* is what gets touched, and an undeclared
+    section must be an absent JSON key — the server detects sections with
+    pointers, so `"routes": []` is "delete my routes" while no `routes` key at
+    all is "leave them alone". `Manifest` makes that a type-level decision:
+    only sections you set are written. Permissions the document stops naming
+    are deprecated and roles are retired — never deleted, and no existing
+    grant stops working — but routes are replaced wholesale, and unlike the
+    other two the server has no rail against emptying them. `WithRoutes()`
+    with no routes is refused; emptying the table on purpose is
+    `ClearRoutes()`.
+
+    `Validate` catches locally what the server would reject, including the
+    mistake the server calls out by name: roles and routes name permissions as
+    `resource:action` without the application slug, and the error says which
+    form to use rather than "invalid argument" against a value that looks
+    right. `ManifestReport` is typed rather than a JSON string, and prints a
+    readable summary meant for after a dry run.
 - **`anubiskit/`**, go-kit middleware with HTTP, gRPC and AMQP transports
   sharing one service and endpoint layer.
 - **`anubistest/`**, an in-process server for testing integrations.
