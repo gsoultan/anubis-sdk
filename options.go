@@ -22,11 +22,17 @@ type options struct {
 	clientID     string
 	clientSecret string
 	apiKey       string
-	tenant       string
-	loginStore   LoginStore
-	cache        *decisionCache
-	headers      map[string]string
-	now          func() time.Time
+
+	// platformCredential records that apiKey was supplied as a PLATFORM key.
+	// It changes nothing on the wire — the two shapes are identical and the
+	// server decides by lookup — and exists so IsPlatformCredential can answer
+	// what a call site declared.
+	platformCredential bool
+	tenant             string
+	loginStore         LoginStore
+	cache              *decisionCache
+	headers            map[string]string
+	now                func() time.Time
 }
 
 // WithApplication identifies the calling application by its registered slug —
@@ -57,6 +63,41 @@ func WithAPIKey(key string) Option {
 			return errors.New(`anubis: an api key looks like "anb_live_<prefix>_<secret>"`)
 		}
 		o.apiKey = key
+		return nil
+	}
+}
+
+// WithPlatformKey authenticates as a PLATFORM OPERATOR.
+//
+// It is the same anb_live_ shape as WithAPIKey and goes in the same header —
+// nothing in the string says which you hold, and the server decides by which
+// store issued it. So this option changes no bytes on the wire. What it changes
+// is what a call site says out loud.
+//
+// # The difference the shape hides
+//
+// A tenant key administers ONE tenant and is refused on the admin plane
+// entirely. A platform key administers EVERY TENANT in the installation:
+// identities, grants, roles, scope nodes, sign-in pages, for all of them. The
+// admin package needs one, which means anything reading grants holds a
+// credential far larger than the read it is doing.
+//
+// Because the two are indistinguishable by shape, WithAPIKey has always
+// accepted a platform key silently. That works and will keep working; it just
+// means a reviewer cannot tell from the constructor which credential a service
+// holds. Use this one when it is the larger, so the blast radius is visible
+// where it is taken on rather than in a deployment variable's name.
+//
+// Anubis bounds a platform key at 90 days, on the grounds that a credential
+// administering the installation must not outlive the reason it was made. A
+// service holding one needs a rotation story before it needs anything else.
+func WithPlatformKey(key string) Option {
+	return func(o *options) error {
+		if !strings.HasPrefix(key, "anb_live_") {
+			return errors.New(`anubis: a platform key looks like "anb_live_<prefix>_<secret>"`)
+		}
+		o.apiKey = key
+		o.platformCredential = true
 		return nil
 	}
 }

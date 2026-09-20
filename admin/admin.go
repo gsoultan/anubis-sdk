@@ -151,6 +151,35 @@ type GrantScope struct {
 	// Inherit means the grant reaches descendants of this node, not only the
 	// node itself.
 	Inherit bool `json:"inherit"`
+
+	// Exclude carves this node OUT of the grant's includes on the same axis —
+	// "everywhere under Jakarta except Surabaya".
+	//
+	// It is scoped to the grant it sits on and to no other, so grants still
+	// compose by union: a second grant covering the excluded place still allows
+	// there. That is what makes it not the cross-grant deny ADR-0004 deferred.
+	//
+	// ANYTHING BUILDING AN AUTHORIZATION DECISION FROM THESE MUST READ IT.
+	// A consumer that reads only Inherit gets a grant WIDER than the one Anubis
+	// holds, and a wider grant nobody asked for is indistinguishable from a
+	// correct one until somebody reads a record they should not have. The field
+	// was absent from this struct until 2026-09-20 while the wire carried it,
+	// which is why Entitlements now refuses rather than quietly returning one.
+	Exclude bool `json:"exclude"`
+}
+
+// HasExclusions reports whether any scope on this grant is a carve-out.
+//
+// Offered because the check is easy to forget and its absence is silent: the
+// natural loop over Scopes reads Axis and NodeID, and an exclusion looks
+// exactly like an include to code that does not ask.
+func (g Grant) HasExclusions() bool {
+	for _, s := range g.Scopes {
+		if s.Exclude {
+			return true
+		}
+	}
+	return false
 }
 
 // Grant is one role conferred on one identity, over some scope, for some time.

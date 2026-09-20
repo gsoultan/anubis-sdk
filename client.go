@@ -375,3 +375,15 @@ func jsonBody(v any) io.Reader {
 type errReader struct{ err error }
 
 func (e errReader) Read([]byte) (int, error) { return 0, e.err }
+
+// IsPlatformCredential reports whether this client was built with
+// WithPlatformKey.
+//
+// It reflects what the CALL SITE declared, not what the server will decide: the
+// two key shapes are identical and only Anubis knows which store issued one. So
+// a false here means "nobody said this was a platform key", which is also what
+// you get from a platform key passed through WithAPIKey.
+//
+// Offered for the case that is otherwise invisible — a service asserting in its
+// own startup that it did not accidentally receive the larger credential.
+func (c *Client) IsPlatformCredential() bool { return c.opts.platformCredential }
