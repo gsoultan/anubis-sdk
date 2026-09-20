@@ -14,10 +14,12 @@ ROOT=$(pwd)
 
 FAILED=()
 PASSED=()
+SKIPPED=()
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
 ok() { PASSED+=("$1"); printf '\033[32m   ok\033[0m   %s\n' "$1"; }
 bad() { FAILED+=("$1"); printf '\033[31m   FAIL\033[0m %s\n' "$1"; }
+skip() { SKIPPED+=("$1"); printf '\033[33m   skip\033[0m %s — %s\n' "$1" "$2"; }
 
 run() { # run <label> <command...>
   local label=$1
@@ -55,6 +57,22 @@ else
   ok "root module has no dependencies"
 fi
 
+# The vendored contract, against the server it was copied from. This is the
+# one check CI cannot run — the server repository is private — so it lives
+# here, and skips rather than guesses when the checkout is not beside us.
+# Every field that has ever drifted turned out to be a live bug.
+SERVER=${ANUBIS_SERVER:-../anubis}
+if [ -d "$SERVER/proto/anubis/v1" ]; then
+  if drift=$(scripts/drift.sh "$SERVER" 2>&1); then
+    ok "proto/ matches the server contract"
+  else
+    bad "proto/ matches the server contract"
+    printf '%s\n' "$drift" | sed 's/^/  /'
+  fi
+else
+  skip "proto/ matches the server contract" "no server checkout at $SERVER"
+fi
+
 run "go vet (root)" go vet ./...
 # -race because the single-flight rotation in TokenSource is the one thing in
 # this SDK a serial test cannot prove.
@@ -67,6 +85,7 @@ cd "$ROOT"
 
 say "Summary"
 printf '   %d passed' "${#PASSED[@]}"
+[ ${#SKIPPED[@]} -gt 0 ] && printf ', \033[33m%d skipped\033[0m' "${#SKIPPED[@]}"
 [ ${#FAILED[@]} -gt 0 ] && printf ', \033[31m%d failed\033[0m' "${#FAILED[@]}"
 printf '\n'
 

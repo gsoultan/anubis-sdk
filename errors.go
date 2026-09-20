@@ -210,6 +210,8 @@ func (e *UnavailableError) Unwrap() error { return e.err }
 const (
 	codeRefreshReuse   = "refresh_token_reuse_detected"
 	codeStepUpRequired = "step_up_required"
+	codeScopeMismatch  = "scope_mismatch"
+	codeScopeExcluded  = "scope_excluded"
 	codeRateLimited    = "rate_limited"
 	codeUnauthct       = "unauthenticated"
 	codeInvalidToken   = "invalid_token"

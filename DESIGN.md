@@ -366,6 +366,22 @@ Keyed on the full `(subject, permission, scopes, amr, auth_time)` tuple. Denies
 carrying `step_up_required` are never cached — they become stale the moment the
 user re-authenticates, which is the entire point of them.
 
+There is a third answer for a long-lived service, and it is the one that does
+not trade the hot path for the window:
+
+```go
+go client.StreamRevocations(ctx, tenant, func(r anubis.Revocation) error { … })
+```
+
+The stream says what stopped being valid — a session, or every token issued to
+an identity before an epoch — as it happens. What it is not is an authority.
+Anubis drops events for a consumer that is not connected rather than queueing
+them, because a slow reader must never hold up the gate's refresh path, so
+being away means having missed them. That is survivable only because tokens
+are short-lived and the snapshot remains the thing that decides: a gap means
+"check again", never "allow". `RevocationSynced` arrives first, once, so
+"nothing has happened yet" and "not connected yet" are distinguishable.
+
 ### 3.8 Testing
 
 An SDK that cannot be tested against gets integrated once and never touched
@@ -470,9 +486,39 @@ request, and it silently rendered the first page of an axis as though it were
 the whole axis.
 
 CI cannot close this, because the server repository is private and CI has no
-checkout of it. Re-diffing `proto/` against the server is a step for whoever
-moves the server, and the honest thing is to say so here rather than to name a
-file that does the job and does not exist.
+checkout of it. What can be closed is the remembering, and
+[`scripts/drift.sh`](scripts/drift.sh) does that much:
+
+```bash
+scripts/drift.sh                 # defaults to ../anubis
+scripts/drift.sh /path/to/anubis # or $ANUBIS_SERVER
+```
+
+It diffs every vendored file against the server's, names the ones that moved,
+and flags a file the server has that this SDK does not — a whole service the
+client cannot see. `scripts/ci/local.sh` runs it when the checkout is beside
+you and **skips** when it is not: a check that cannot see what it compares
+against must not return a verdict either way, and a green tick meaning "the
+server was not on this machine" is the kind of tick this repository has been
+burned by before.
+
+So the honest position is narrower than it was, not solved. The diff is now a
+command rather than a memory — but it still only runs for whoever has both
+repositories, and it still says nothing about whether the client was *changed*
+to match. That part is judgement, and the evidence says to use it: the re-diff
+on 2026-09-20 found four changes, and every one of them was a bug rather than
+paperwork.
+
+- `GrantScope` grew `exclude`, so one grant can say "everywhere under Jakarta
+  except the Surabaya branch". The hand-written client read every row on an
+  axis as a reach, which made an access review report the carve-out as
+  conferred — the opposite of what somebody deliberately wrote down.
+- `ScopeNode` grew `child_count`. A picker gates its expand control on it, and
+  the axis is paged, so a node that drops it is a subtree nobody can open.
+- `AuthzService` gained the deny reason `scope_excluded`, which needs the
+  opposite remedy to the `scope_mismatch` it used to be spelled as.
+- `TokenService` gained `StreamRevocations`, the first streaming procedure the
+  SDK speaks (§8).
 
 ---
 

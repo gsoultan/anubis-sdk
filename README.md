@@ -115,7 +115,7 @@ go-kit's own `auth/jwt`: a `RequestFunc` lifts the credential inward and
 service and endpoint layers written once and shared by all three. It is a
 separate module so the root stays dependency-free.
 
-## Four things worth knowing before you ship
+## Five things worth knowing before you ship
 
 **The audience check is not optional.** A verifier without one accepts tokens
 minted for the HR application in the payments application — the classic
@@ -142,6 +142,29 @@ an application with its own session cookie keeps a user signed in after they
 have signed out everywhere. The SDK ships it as a handler; wire it to the URI
 you registered.
 
+**A revocation stream is an invalidation, never a decision.**
+`Client.StreamRevocations` pushes sessions ending and identities being
+invalidated in bulk, so a long-lived service can drop state before the access
+token expires without putting Anubis in the hot path. What it is not is an
+authority: Anubis drops events for a consumer that is not connected rather
+than queueing them, so a consumer that was away simply missed them. Treat a
+gap as "check again" — the short token lifetime is what makes that safe, and
+`RevocationSynced` is the first message precisely so "nothing has happened"
+and "not connected" are different things.
+
+```go
+// service credential: this is a whole tenant's session state
+go client.StreamRevocations(ctx, "impack", func(r anubis.Revocation) error {
+    switch r.Kind {
+    case anubis.RevocationSession:
+        sessions.Drop(r.Session)
+    case anubis.RevocationEpoch:
+        sessions.DropIssuedBefore(r.Subject, r.Epoch)
+    }
+    return nil
+})
+```
+
 ## Repository layout
 
 ```
@@ -151,6 +174,7 @@ anubistest/       an in-process Anubis for tests, integration plane and admin
 anubiskit/        go-kit adapter for HTTP, gRPC and AMQP — a SEPARATE module
 examples/         a worked browser application, end-to-end tested
 proto/anubis/v1/  the vendored contract, for reference — nothing generates
+scripts/drift.sh  is proto/ still the server's contract? needs both checkouts
 docs/WIRE.md      the contract in prose, for people not using an SDK
 docs/MIGRATION.md pkg/anubis → anubis-sdk, and the dependency inversion
 DESIGN.md         why the SDK is shaped this way
@@ -194,12 +218,12 @@ site to prevent nothing.
 ## Status
 
 Implemented and tested — offline verification, PKCE sign-in, decisions with
-step-up, rotation with reuse detection, back-channel logout, client
-credentials:
+step-up, rotation with reuse detection, back-channel logout, streamed
+revocations, client credentials:
 
 | Module | Tests | |
 | :--- | ---: | :--- |
-| root (`.`, `keys`, `paseto`, `admin`, `examples`) | 110 | `go test -race ./...` |
+| root (`.`, `keys`, `paseto`, `admin`, `examples`) | 124 | `go test -race ./...` |
 | `anubiskit` (HTTP, gRPC, AMQP) | 21 | `cd anubiskit && go test -race ./...` |
 
 Two modules, one command:
@@ -208,8 +232,12 @@ Two modules, one command:
 scripts/ci/local.sh
 ```
 
-It runs gofmt, vet and the race detector over both, and asserts the thing the
-tests cannot: that the root `go.mod` still has no `require` block.
+It runs gofmt, vet and the race detector over both, and asserts two things the
+tests cannot: that the root `go.mod` still has no `require` block, and — when
+an Anubis checkout is beside this one — that `proto/` has not fallen behind the
+server it was vendored from. The contract check skips rather than passes when
+there is no checkout to compare against, because the server repository is
+private and CI has none.
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) does the same, with the
 toolchain pinned, so a missing `go` on a developer machine cannot read as a
 pass.

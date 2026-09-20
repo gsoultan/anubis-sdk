@@ -27,6 +27,11 @@ type GrantRow struct {
 	// hold SEVERAL nodes on one axis, which is the whole reason entitlement
 	// cannot be expressed as the flat map a token carries.
 	Scopes map[anubis.Axis][]string
+	// Excludes maps an axis to the nodes carved back out of Scopes on it.
+	// Anubis refuses an axis that is nothing but excludes, so a row here
+	// without a Scopes entry on the same axis is a grant the real server
+	// would not have stored.
+	Excludes map[anubis.Axis][]string
 }
 
 // AddGrant registers a grant against an identity.
@@ -207,6 +212,7 @@ func (s *Server) listScopeNodes(w http.ResponseWriter, r *http.Request) {
 		matched = append(matched, map[string]any{
 			"id": n.ID, "axis": string(n.Axis), "name": n.Name,
 			"parentId": n.ParentID, "status": n.Status,
+			"childCount": childCount(all, n, req.IncludeArchived),
 		})
 	}
 
@@ -233,6 +239,24 @@ func (s *Server) listScopeNodes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// childCount counts the children this same call would return, which is what
+// the real listing reports: a node whose only children are archived has none
+// to expand to unless the caller asked for archived ones, and a chevron that
+// opens onto nothing is worse than no chevron.
+func childCount(all []ScopeNodeRow, parent ScopeNodeRow, includeArchived bool) int {
+	n := 0
+	for _, c := range all {
+		if c.Axis != parent.Axis || c.ParentID != parent.ID {
+			continue
+		}
+		if c.Status == "archived" && !includeArchived {
+			continue
+		}
+		n++
+	}
+	return n
+}
+
 func grantJSON(subject string, g GrantRow) map[string]any {
 	scopes := make([]map[string]any, 0)
 	for axis, nodes := range g.Scopes {
@@ -240,6 +264,14 @@ func grantJSON(subject string, g GrantRow) map[string]any {
 			scopes = append(scopes, map[string]any{
 				"axis": string(axis), "nodeId": node,
 				"nodeName": node, "inherit": true,
+			})
+		}
+	}
+	for axis, nodes := range g.Excludes {
+		for _, node := range nodes {
+			scopes = append(scopes, map[string]any{
+				"axis": string(axis), "nodeId": node,
+				"nodeName": node, "inherit": true, "exclude": true,
 			})
 		}
 	}

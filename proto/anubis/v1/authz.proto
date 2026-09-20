@@ -28,9 +28,13 @@ message AuthorizeRequest {
 
 message AuthorizeResponse {
   bool allow = 1;
-  // On deny: "scope_mismatch" | "permission_not_held" | "identity_inactive" |
-  // "insufficient_assurance" | "self_scope_required" | "axis_unresolved" |
-  // "step_up_required" | ...
+  // On deny: "scope_mismatch" | "scope_excluded" | "permission_not_held" |
+  // "identity_inactive" | "insufficient_assurance" | "self_scope_required" |
+  // "axis_unresolved" | "step_up_required" | ...
+  //
+  // scope_excluded is separate from scope_mismatch on purpose: a grant DID
+  // reach this target and an exclusion took it back (0046). The two need
+  // opposite fixes, and one string for both hides which.
   string reason = 2;
   string failing_axis = 3;
   string message = 4;

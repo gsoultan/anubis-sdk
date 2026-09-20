@@ -41,6 +41,23 @@ func (d Decision) NeedsStepUp() bool { return d.Reason == codeStepUpRequired }
 // sends it as a string; a caller comparing durations should not have to.
 func (d Decision) MaxAuthAgeDuration() (time.Duration, bool) { return parseAge(d.MaxAuthAge) }
 
+// ScopeMismatch reports that no grant this subject holds reaches the target on
+// FailingAxis. Nobody has taken anything away; it was never conferred.
+//
+// The cure is a grant. Say that, rather than the "your access was removed" a
+// ScopeExcluded refusal calls for.
+func (d Decision) ScopeMismatch() bool { return d.Reason == codeScopeMismatch }
+
+// ScopeExcluded reports that a grant DID reach the target on FailingAxis and
+// an exclusion carved it back out.
+//
+// Anubis separates this from ScopeMismatch on purpose, and it is worth keeping
+// separate here. The two look identical to a user — access refused on an axis
+// — and need opposite fixes: a mismatch wants somebody to grant the scope, and
+// an exclusion wants somebody to lift a carve-out that was added deliberately.
+// Collapsing them sends every one of these to the wrong queue.
+func (d Decision) ScopeExcluded() bool { return d.Reason == codeScopeExcluded }
+
 // Err renders a refusal as a typed error, or nil when allowed.
 func (d Decision) Err() error {
 	if d.Allow {

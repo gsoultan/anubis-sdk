@@ -350,6 +350,9 @@ message ScopeNode {
   string external_ref = 7;
   string status = 8;
   bool is_axis_root = 9;
+  // How many children this node has. The console gates its expand chevron on
+  // this, so a ScopeNode that does not carry it is a tree that cannot open.
+  int32 child_count = 10;
 }
 
 message ListScopeNodesRequest {
@@ -723,11 +726,23 @@ message ListPermissionsResponse {
   repeated Permission permissions = 1;
 }
 
+// One place on one axis, and what the grant does with it.
+//
+// `exclude` is a bool and not a mode string on purpose. proto3's zero value
+// has to BE the safe reading, and a client that has never heard of exclusions
+// sends false — an include, exactly what it meant. A string field would leave
+// two ways to get this wrong: reject "" and break every old client, or coerce
+// "" to include and coerce a misspelt "exlcude" along with it, turning a
+// carve-out into a widening with no error anywhere. There is no string to
+// misspell here.
 message GrantScope {
   string axis = 1;
   string node_id = 2;
   string node_name = 3;
   bool inherit = 4;
+  // Carved out of this grant's includes on the same axis — and out of no
+  // other grant. See ADR-0004.
+  bool exclude = 5;
 }
 
 message Grant {

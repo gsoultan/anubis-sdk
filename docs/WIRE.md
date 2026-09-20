@@ -246,10 +246,19 @@ POST /anubis.v1.AuthzService/Authorize
 { "allow": false, "reason": "scope_mismatch", "failingAxis": "customer",
   "message": "no grant at or above customer node …" }
 
+{ "allow": false, "reason": "scope_excluded", "failingAxis": "org",
+  "message": "a grant reaches this node and excludes it" }
+
 { "allow": false, "reason": "step_up_required",
   "requiredAmr": ["otp"], "maxAuthAge": "2m",
   "currentAmr": ["pwd"], "authAge": "41m" }
 ```
+
+`scope_excluded` is separate from `scope_mismatch` on purpose, and a client
+must keep them separate. A mismatch means no grant ever reached the target; an
+exclusion means one did and a carve-out took it back. They are identical to the
+person refused and need opposite fixes — grant the scope, or lift the carve-out
+— so one string for both sends every one of these to the wrong queue.
 
 Supply every axis the action touches. On a strict axis an **omitted axis is
 denied, not ignored**. Self-scoped access passes the record owner under the
@@ -294,6 +303,46 @@ check the `events` claim**. An access token passes every other check on that
 list, because the same issuer minted it for the same audience; without the
 event check, anyone holding a user's access token can sign them out at will.
 
+### Revocations — a stream, and only an invalidation
+
+```
+POST /anubis.v1.TokenService/StreamRevocations
+Content-Type: application/connect+json
+```
+
+The one streaming procedure here, so it is the one place the framing differs:
+every message in both directions carries a five-byte prefix — one flag byte,
+then a four-byte big-endian length — ahead of the JSON.
+
+```jsonc
+// flags 0x00 — a message
+{ "kind": "KIND_SYNCED", "tenant": "impack", "observedAt": "1735689000" }
+{ "kind": "KIND_SESSION_REVOKED", "tenant": "impack",
+  "sid": "ses_…", "sub": "usr_…", "observedAt": "1735689042" }
+{ "kind": "KIND_EPOCH_BUMPED", "tenant": "impack",
+  "sub": "usr_…", "epoch": 4, "observedAt": "1735689100" }
+
+// flags 0x02 — the closing frame, under a status that already said 200
+{ "error": { "code": "unauthenticated", "message": "…" } }
+```
+
+Three things this contract requires of a consumer, all of them load-bearing:
+
+- **It is a cache invalidation, not an authorization decision.** Anubis drops
+  events for anyone not connected rather than queueing them — a slow reader
+  must never hold up the gate — so a consumer that was away missed whatever
+  happened while it was away. Treat a gap as "check again", never as "allow".
+  Correctness comes from short token lifetimes and from re-checking.
+- **A refusal arrives in the closing frame, not in the HTTP status.** A stream
+  answers `200` and then fails; judging by status alone reports success while
+  the consumer sits there believing it is subscribed.
+- **`KIND_SYNCED` arrives first, once.** It is the only thing that separates
+  "nothing has happened yet" from "not connected yet".
+
+Service authentication only, as for `Introspect`: this is session state for a
+whole tenant. A tenant-scoped credential watches its own tenant whatever it
+asks for, so `tenant` in the request is honoured only for a platform one.
+
 ### Forward auth
 
 ```
@@ -311,7 +360,7 @@ X-Original-URI · X-Original-Method · X-Original-Host · X-Anubis-Tenant
 | :--- | :--- |
 | `AuthService` | `Login` `VerifyMfa` `Refresh` `Logout` `LogoutAll` `LogoutSession` `ClientCredentials` `BeginTotpEnrollment` `ConfirmTotpEnrollment` `Register` |
 | `AuthzService` | `Authorize` `Explain` `SwitchScope` |
-| `TokenService` | `Introspect` `Revoke` |
+| `TokenService` | `Introspect` `Revoke` `StreamRevocations` |
 | `SessionService` | `GetMe` `ListSessions` `RevokeSession` |
 
 Administration — `TenantAdminService`, `IdentityAdminService`,

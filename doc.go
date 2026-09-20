@@ -29,6 +29,12 @@
 // Where that window is unacceptable, Client.Introspect asks Anubis — at the
 // cost of putting it back in your hot path.
 //
+// Client.StreamRevocations narrows the same window without that cost: Anubis
+// pushes sessions ending and identities invalidated in bulk, and a long-lived
+// service drops its own state on the event. It is an invalidation and not an
+// authority — a consumer that was disconnected missed whatever happened while
+// it was away — so a gap means "check again", never "allow".
+//
 // # Ask — before a privileged action
 //
 // A Client signs users in, keeps sessions alive, and asks whether somebody may

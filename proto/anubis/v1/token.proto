@@ -10,6 +10,48 @@ option go_package = "github.com/gsoultan/anubis/gen/go/anubis/v1;anubisv1";
 service TokenService {
   rpc Introspect(IntrospectRequest) returns (IntrospectResponse);
   rpc Revoke(RevokeRequest) returns (RevokeResponse);
+
+  // StreamRevocations pushes revocations as they happen, so a resource
+  // server can drop a session before the access token expires without
+  // putting Anubis in the hot path the way Introspect does.
+  //
+  // The stream is a CACHE INVALIDATION, not an authorization decision. A
+  // consumer that misses an event because it was disconnected must still be
+  // correct, which is why tokens stay short-lived and why the snapshot
+  // remains the authority. Treat a gap as "check again", never as "allow".
+  rpc StreamRevocations(StreamRevocationsRequest) returns (stream StreamRevocationsResponse);
+}
+
+message StreamRevocationsRequest {
+  // Tenant to watch. Ignored for a tenant-scoped credential, which can only
+  // ever watch its own.
+  string tenant = 1;
+}
+
+// StreamRevocationsResponse names something that stopped being valid. One
+// message per event; the stream stays open.
+message StreamRevocationsResponse {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    // One session ended: logout, admin revocation, or refresh-token theft
+    // detection. sid is set.
+    KIND_SESSION_REVOKED = 1;
+    // Every token issued to an identity before epoch is now invalid, which
+    // is how a password change or a disable invalidates in bulk. sub and
+    // epoch are set.
+    KIND_EPOCH_BUMPED = 2;
+    // The stream is live and the consumer has seen the current state. Sent
+    // once, before any change events, so a client can tell "nothing has
+    // happened yet" from "not connected yet".
+    KIND_SYNCED = 3;
+  }
+  Kind kind = 1;
+  string tenant = 2;
+  string sid = 3;
+  string sub = 4;
+  int32 epoch = 5;
+  // When Anubis observed it, not when the consumer received it.
+  int64 observed_at = 6;
 }
 
 message IntrospectRequest {

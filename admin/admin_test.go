@@ -357,3 +357,116 @@ func TestSearchGrantsCarriesUsernamesAlongside(t *testing.T) {
 		t.Errorf("usernames = %v", page.Usernames)
 	}
 }
+
+// TestGrantNodesDropExclusions is the regression test for an access review
+// that reports the opposite of the truth.
+//
+// The root cause it guards: a grant scope carries a mode, and a client that
+// reads every row on an axis as a reach renders the one node somebody
+// deliberately carved out as one of the nodes the grant confers.
+func TestGrantNodesDropExclusions(t *testing.T) {
+	s, c := start(t, operatorKey)
+	s.AddGrant("usr_1", anubistest.GrantRow{ID: "g1", Role: "billing.clerk",
+		Scopes:   map[anubis.Axis][]string{"org": {"org-jakarta", "org-bandung"}},
+		Excludes: map[anubis.Axis][]string{"org": {"org-surabaya"}}})
+
+	grants, err := c.Grants(context.Background(), "usr_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(grants) != 1 {
+		t.Fatalf("got %d grants, want 1", len(grants))
+	}
+
+	nodes := grants[0].Nodes("org")
+	for _, n := range nodes {
+		if n == "org-surabaya" {
+			t.Fatalf("Nodes = %v; the carve-out is reported as a reach", nodes)
+		}
+	}
+	if len(nodes) != 2 {
+		t.Errorf("Nodes = %v, want the two includes", nodes)
+	}
+	excludes := grants[0].Excludes("org")
+	if len(excludes) != 1 || excludes[0] != "org-surabaya" {
+		t.Errorf("Excludes = %v, want [org-surabaya] — the part that explains a refusal", excludes)
+	}
+}
+
+// TestExcludingAnIncludedNodeRemovesIt covers the shape a UI actually
+// produces: the same node included and excluded on one axis. The exclusion
+// wins within the grant, because that is the only reading under which writing
+// one down does anything.
+func TestExcludingAnIncludedNodeRemovesIt(t *testing.T) {
+	s, c := start(t, operatorKey)
+	s.AddGrant("usr_1", anubistest.GrantRow{ID: "g1", Role: "billing.clerk",
+		Scopes:   map[anubis.Axis][]string{"org": {"org-jakarta"}},
+		Excludes: map[anubis.Axis][]string{"org": {"org-jakarta"}}})
+
+	grants, err := c.Grants(context.Background(), "usr_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nodes := grants[0].Nodes("org"); len(nodes) != 0 {
+		t.Errorf("Nodes = %v, want none", nodes)
+	}
+}
+
+// TestScopeNodesCarryTheirChildCount is the regression test for a tree that
+// cannot open.
+//
+// The root cause it guards: an axis is paged, so a picker decides whether to
+// draw an expand control from the row it already has. A ScopeNode that drops
+// child_count leaves every node looking like a leaf.
+func TestScopeNodesCarryTheirChildCount(t *testing.T) {
+	s, c := start(t, operatorKey)
+	s.AddScopeNode(anubistest.ScopeNodeRow{ID: "org-jakarta", Axis: "org", Name: "Jakarta", Status: "active"})
+	s.AddScopeNode(anubistest.ScopeNodeRow{ID: "org-sudirman", Axis: "org", Name: "Sudirman",
+		ParentID: "org-jakarta", Status: "active"})
+	s.AddScopeNode(anubistest.ScopeNodeRow{ID: "org-kuningan", Axis: "org", Name: "Kuningan",
+		ParentID: "org-jakarta", Status: "active"})
+	s.AddScopeNode(anubistest.ScopeNodeRow{ID: "org-old", Axis: "org", Name: "Old",
+		ParentID: "org-sudirman", Status: "archived"})
+
+	nodes, err := c.AllScopeNodes(context.Background(), admin.ScopeNodeQuery{Axis: "org"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]admin.ScopeNode{}
+	for _, n := range nodes {
+		byID[n.ID] = n
+	}
+	if got := byID["org-jakarta"].ChildCount; got != 2 {
+		t.Errorf("org-jakarta ChildCount = %d, want 2", got)
+	}
+	if !byID["org-jakarta"].HasChildren() {
+		t.Error("org-jakarta has children and must say so, or the picker draws no chevron")
+	}
+	// The count is of the children THIS call would return. An archived-only
+	// parent that claimed a child would draw a chevron opening onto nothing.
+	if got := byID["org-sudirman"].ChildCount; got != 0 {
+		t.Errorf("org-sudirman ChildCount = %d, want 0 — its only child is archived", got)
+	}
+	if byID["org-kuningan"].HasChildren() {
+		t.Error("org-kuningan is a leaf")
+	}
+}
+
+// TestArchivedChildrenCountWhenAsked is the other half of the rule: a caller
+// listing archived nodes is going to expand into them.
+func TestArchivedChildrenCountWhenAsked(t *testing.T) {
+	s, c := start(t, operatorKey)
+	s.AddScopeNode(anubistest.ScopeNodeRow{ID: "org-sudirman", Axis: "org", Name: "Sudirman", Status: "active"})
+	s.AddScopeNode(anubistest.ScopeNodeRow{ID: "org-old", Axis: "org", Name: "Old",
+		ParentID: "org-sudirman", Status: "archived"})
+
+	nodes, err := c.AllScopeNodes(context.Background(), admin.ScopeNodeQuery{Axis: "org", Archived: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range nodes {
+		if n.ID == "org-sudirman" && n.ChildCount != 1 {
+			t.Errorf("org-sudirman ChildCount = %d, want 1 when archived nodes are listed", n.ChildCount)
+		}
+	}
+}

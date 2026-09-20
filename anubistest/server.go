@@ -75,6 +75,12 @@ type Server struct {
 	applicationPage int
 	// seq names things the fake creates: cat_1, run_2.
 	seq int
+	// Open revocation-stream subscribers, keyed by a sequence rather than by
+	// anything a caller supplies: two consumers of the same tenant are two
+	// subscriptions, and keying by tenant would make the second replace the
+	// first.
+	revSubs map[int64]chan RevocationRow
+	revSeq  int64
 	// Calls counts procedure hits, so a test can assert that concurrent
 	// callers produced exactly one refresh.
 	Calls map[string]int
@@ -125,6 +131,7 @@ func NewServer(t testing.TB) *Server {
 		consumed:    map[string]bool{},
 		codes:       map[string]authCode{},
 		grants:      map[anubis.SubjectID][]GrantRow{},
+		revSubs:     map[int64]chan RevocationRow{},
 		Calls:       map[string]int{},
 		// Big enough that tests which do not care about paging never meet it,
 		// small enough that ScopeNodePageSize can drive it down to prove a
@@ -139,6 +146,7 @@ func NewServer(t testing.TB) *Server {
 	mux.HandleFunc("/anubis.v1.AuthService/Login", s.login)
 	mux.HandleFunc("/anubis.v1.AuthService/ClientCredentials", s.clientCredentials)
 	mux.HandleFunc("/anubis.v1.TokenService/Introspect", s.introspect)
+	mux.HandleFunc("/anubis.v1.TokenService/StreamRevocations", s.streamRevocations)
 	mux.HandleFunc("/v1/authorize", s.browserAuthorize)
 	mux.HandleFunc("/v1/token", s.tokenExchange)
 	s.adminRoutes(mux)

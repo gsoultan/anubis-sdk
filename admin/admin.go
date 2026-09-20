@@ -151,6 +151,15 @@ type GrantScope struct {
 	// Inherit means the grant reaches descendants of this node, not only the
 	// node itself.
 	Inherit bool `json:"inherit"`
+	// Exclude carves this node back out of the grant's includes on the same
+	// axis — and out of no other grant. Anubis refuses an axis that is
+	// nothing but excludes, so an exclusion always sits beside an include:
+	// "everywhere under Jakarta except the Surabaya branch". See ADR-0004.
+	//
+	// Anything reading Scopes directly has to test this. A carve-out counted
+	// as a reach is an access review that reports the opposite of the truth,
+	// which is why [Grant.Nodes] and [Grant.Excludes] exist.
+	Exclude bool `json:"exclude"`
 }
 
 // Grant is one role conferred on one identity, over some scope, for some time.
@@ -189,11 +198,39 @@ func (g Grant) IsLive(at time.Time) bool {
 	return true
 }
 
-// Nodes lists the nodes this grant reaches on one axis.
+// Nodes lists the nodes this grant reaches on one axis, carve-outs removed.
+//
+// What cannot be removed here is an exclusion BELOW an inherited include:
+// deciding whether cust_42 sits under org_north needs the tree, which is a
+// [Client.AllScopeNodes] call away and not in this struct. So this is the
+// grant's reach as far as the grant alone can state it — an upper bound, and
+// the authority on "may this subject act here" remains Authorize, which has
+// the tree and answers scope_excluded when a carve-out is what refused.
 func (g Grant) Nodes(axis anubis.Axis) []string {
+	excluded := make(map[string]bool)
+	for _, s := range g.Scopes {
+		if s.Axis == axis && s.Exclude {
+			excluded[s.NodeID] = true
+		}
+	}
 	var out []string
 	for _, s := range g.Scopes {
-		if s.Axis == axis {
+		if s.Axis == axis && !s.Exclude && !excluded[s.NodeID] {
+			out = append(out, s.NodeID)
+		}
+	}
+	return out
+}
+
+// Excludes lists the nodes carved out of this grant on one axis.
+//
+// A review that renders Nodes and stops is describing a grant nobody wrote.
+// The carve-out is the part somebody went out of their way to add, and it is
+// the part that explains a refusal the includes cannot.
+func (g Grant) Excludes(axis anubis.Axis) []string {
+	var out []string
+	for _, s := range g.Scopes {
+		if s.Axis == axis && s.Exclude {
 			out = append(out, s.NodeID)
 		}
 	}
@@ -507,7 +544,16 @@ type ScopeNode struct {
 	ExternalRef string      `json:"externalRef"`
 	Status      string      `json:"status"`
 	IsAxisRoot  bool        `json:"isAxisRoot"`
+	// ChildCount is how many children the node has. A picker gates its expand
+	// control on this, so a tree built from nodes that do not carry it is a
+	// tree that cannot open.
+	ChildCount int `json:"childCount"`
 }
+
+// HasChildren reports whether the node can be expanded. Listing an axis is
+// paged, so the alternative — asking for the children to find out whether
+// there are any — is a round trip per row of the picker.
+func (n ScopeNode) HasChildren() bool { return n.ChildCount > 0 }
 
 // IsArchived reports whether the node has been retired. Archived nodes keep
 // deciding for existing grants but should not be offered in a picker.

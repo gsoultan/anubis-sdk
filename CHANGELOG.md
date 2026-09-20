@@ -5,6 +5,55 @@ Format follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html), and while the major
 version is 0 the API may still move.
 
+## [Unreleased]
+
+Re-vendored `proto/anubis/v1/` from the server and worked through what had
+changed. `admin.proto`, `authz.proto` and `token.proto` had all moved; the
+integration-plane protos were byte-identical. Nothing detects this drift and
+nothing can — see DESIGN §6 — so each round is a hunt for what the client now
+gets wrong, not a copy.
+
+### Added
+
+- `Client.StreamRevocations` watches a tenant's revocations, so a resource
+  server can drop a session before the access token expires without putting
+  Anubis in the hot path the way `Introspect` does. It is the SDK's first
+  streaming procedure, and it is **a cache invalidation, not an authorization
+  decision**: Anubis drops events for a consumer that is not connected rather
+  than queueing them, so a gap means "check again" and never "allow". The
+  first message is `RevocationSynced`, which is the only thing separating
+  "nothing has happened yet" from "not connected yet".
+- `anubistest.Server.PushRevocation` and `anubistest.RevocationRow` drive that
+  stream from a test, framing included — the framing is the half with nowhere
+  else to be exercised.
+- `Decision.ScopeExcluded` and `Decision.ScopeMismatch`. Anubis split the deny
+  reason `scope_excluded` out of `scope_mismatch`, and the split matters: a
+  mismatch means no grant ever reached the target, an exclusion means one did
+  and a carve-out took it back. Identical to the person refused, opposite
+  fixes, so a client that cannot tell them apart routes every one of these to
+  the wrong queue.
+- `admin.ScopeNode.ChildCount` and `ScopeNode.HasChildren`. A picker gates its
+  expand control on the count, and listing an axis is paged, so the
+  alternative — asking for the children to find out whether there are any — is
+  a round trip per row.
+- `admin.GrantScope.Exclude` and `Grant.Excludes`, for grants that say
+  "everywhere under Jakarta except the Surabaya branch".
+- `scripts/drift.sh` answers "is `proto/` still the server's contract?" against
+  a sibling Anubis checkout, and names a file the server has that this SDK does
+  not. `scripts/ci/local.sh` runs it, and reports **skip** rather than pass when
+  there is no checkout to compare against. CI still cannot run it — the server
+  repository is private — so this closes the remembering, not the gap.
+
+### Fixed
+
+- `admin.Grant.Nodes` counted an exclusion as a reach. Once the server began
+  sending carve-outs, an access review rendered the one node somebody had gone
+  out of their way to remove as a node the grant confers — the opposite of the
+  truth. It now returns the includes with exclusions removed, and documents
+  the one case it cannot resolve alone: an exclusion below an *inherited*
+  include needs the tree, so `Nodes` is an upper bound and `Authorize` remains
+  the authority.
+
 ## [anubiskit/v0.1.0] — 2026-09-15
 
 First release of the go-kit module, `github.com/gsoultan/anubis-sdk/anubiskit`.

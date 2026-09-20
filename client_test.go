@@ -598,3 +598,43 @@ func TestCallWithoutCredentialIsRefused(t *testing.T) {
 		t.Fatalf("want ErrNoCredential, got %v", err)
 	}
 }
+
+// TestScopeDenialsAreToldApart covers the distinction Anubis added a second
+// reason string for: a mismatch means no grant ever reached this target, and
+// an exclusion means one did and a carve-out took it back. They look identical
+// to the person refused and need opposite fixes — grant the scope, or lift the
+// carve-out — so a client that cannot tell them apart routes every one of
+// these to the wrong queue.
+func TestScopeDenialsAreToldApart(t *testing.T) {
+	cases := []struct {
+		reason   string
+		mismatch bool
+		excluded bool
+	}{
+		{"scope_mismatch", true, false},
+		{"scope_excluded", false, true},
+		{"permission_not_held", false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.reason, func(t *testing.T) {
+			s := newTestServer(t)
+			c := newClient(t, s)
+			s.Deny("usr_1", "billing:invoice:void", tc.reason, "customer")
+
+			d, err := c.AuthorizeSubject(context.Background(), "usr_1",
+				"billing:invoice:void", anubis.Scopes{"customer": "cust-acme"}, nil, time.Time{})
+			if err != nil {
+				t.Fatalf("Authorize: %v", err)
+			}
+			if d.Allow {
+				t.Fatal("decision allowed")
+			}
+			if got := d.ScopeMismatch(); got != tc.mismatch {
+				t.Errorf("ScopeMismatch = %v, want %v", got, tc.mismatch)
+			}
+			if got := d.ScopeExcluded(); got != tc.excluded {
+				t.Errorf("ScopeExcluded = %v, want %v", got, tc.excluded)
+			}
+		})
+	}
+}

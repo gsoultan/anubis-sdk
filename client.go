@@ -30,6 +30,7 @@ const (
 	procSwitchScope       = "/anubis.v1.AuthzService/SwitchScope"
 	procIntrospect        = "/anubis.v1.TokenService/Introspect"
 	procRevoke            = "/anubis.v1.TokenService/Revoke"
+	procStreamRevocations = "/anubis.v1.TokenService/StreamRevocations"
 	procGetMe             = "/anubis.v1.SessionService/GetMe"
 	procListSessions      = "/anubis.v1.SessionService/ListSessions"
 	procRevokeSession     = "/anubis.v1.SessionService/RevokeSession"
