@@ -5,7 +5,7 @@ Format follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html), and while the major
 version is 0 the API may still move.
 
-## [Unreleased]
+## [0.2.0] — 2026-09-27
 
 Re-vendored `proto/anubis/v1/` from the server and worked through what had
 changed. `admin.proto`, `authz.proto` and `token.proto` had all moved; the
