@@ -8,6 +8,7 @@ package anubistest
 // consumer that silently stops seeing revocations.
 
 import (
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -58,6 +59,19 @@ func (s *Server) PushRevocation(r RevocationRow) {
 	}
 }
 
+// RefuseStreams makes StreamRevocations answer the way an Anubis instance
+// that is not watching snapshots does, until called again with false: refused
+// in the closing frame with stream_unavailable, under Connect's "unavailable".
+//
+// The real server means that as "not this instance — another can serve it",
+// so a consumer should reconnect. Refuse, then stop refusing, and a test can
+// watch a consumer's reconnect loop land on a server that streams.
+func (s *Server) RefuseStreams(refuse bool) {
+	s.mu.Lock()
+	s.refuseStreams = refuse
+	s.mu.Unlock()
+}
+
 // subscribeRevocations registers a subscriber and returns it with its removal.
 func (s *Server) subscribeRevocations() (<-chan RevocationRow, func()) {
 	ch := make(chan RevocationRow, revSubBuffer)
@@ -97,14 +111,22 @@ func (s *Server) streamRevocations(w http.ResponseWriter, r *http.Request) {
 
 	// A stream reports its own refusals in the closing frame under a status
 	// that already said 200, which is the part of Connect a client written
-	// against the unary shape gets wrong. Both refusals the real handler can
-	// raise before the first message come out that way here.
+	// against the unary shape gets wrong. The refusals the real handler can
+	// raise before the first message come out that way here, in its order.
 	if r.Header.Get("Authorization") == "" {
-		writeEndStream(w, flusher, "unauthenticated", "no credential")
+		writeEndStream(w, flusher, "unauthenticated", "unauthenticated", "no credential")
+		return
+	}
+	s.mu.Lock()
+	refuse := s.refuseStreams
+	s.mu.Unlock()
+	if refuse {
+		writeEndStream(w, flusher, "unavailable", "stream_unavailable",
+			"Revocation streaming is not enabled on this instance")
 		return
 	}
 	if req.Tenant == "" {
-		writeEndStream(w, flusher, "invalid_argument", "tenant: required")
+		writeEndStream(w, flusher, "invalid_argument", "invalid_argument", "tenant: required")
 		return
 	}
 
@@ -160,10 +182,21 @@ func writeRevocation(w http.ResponseWriter, flusher http.Flusher, tenant string,
 	return true
 }
 
-// writeEndStream closes the stream with an error.
-func writeEndStream(w http.ResponseWriter, flusher http.Flusher, code, message string) {
+// writeEndStream closes the stream with an error, in the real server's shape:
+// Connect's transport class as the code, and the stable domain code in an
+// anubis.v1.ErrorInfo detail. The two differ — stream_unavailable travels as
+// "unavailable" — and a fake that sent only one of them would never show a
+// client losing the other.
+func writeEndStream(w http.ResponseWriter, flusher http.Flusher, class, code, message string) {
 	body, _ := json.Marshal(map[string]any{
-		"error": map[string]any{"code": code, "message": message},
+		"error": map[string]any{
+			"code":    class,
+			"message": code + ": " + message,
+			"details": []map[string]any{{
+				"type":  "anubis.v1.ErrorInfo",
+				"value": base64.StdEncoding.EncodeToString(encodeErrorInfo(code, "")),
+			}},
+		},
 	})
 	_, _ = w.Write(envelope(endStreamFlag, body))
 	flusher.Flush()

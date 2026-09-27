@@ -215,6 +215,7 @@ func parseWireError(raw []byte, status int) *APIError {
 	}
 	out.Message, out.RequestID = w.Message, w.RequestID
 	out.Code = firstNonEmpty(w.Error, w.Code)
+	out.class = w.Code
 
 	if len(w.Details) > 0 {
 		// HTTP envelope: details is an object of strings.

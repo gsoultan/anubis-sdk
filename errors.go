@@ -45,6 +45,11 @@ type APIError struct {
 	RequestID string
 	Status    int
 	Details   map[string]string
+
+	// class is Connect's own code, the coarse transport class, which a domain
+	// code from ErrorInfo displaces from Code. classify falls back on it for a
+	// domain code it does not know. Empty on the plain-HTTP envelope.
+	class string
 }
 
 func (e *APIError) Error() string {
@@ -137,7 +142,10 @@ func (e *RefreshReuseError) Error() string {
 func (e *RefreshReuseError) Unwrap() error { return e.err }
 
 // AuthError reports that the credential was missing, rejected, or lacks the
-// scope the call needs.
+// scope the call needs — or is the wrong kind: an application's token where
+// Anubis requires one it issued for itself, as managing an account's sessions
+// does (see Client.Login). The wrapped APIError says which, and the server's
+// Details["hint"] names the token it wanted.
 type AuthError struct{ err error }
 
 func (e *AuthError) Error() string {
@@ -193,7 +201,11 @@ func (e *EnrolmentRequiredError) Error() string {
 }
 
 // UnavailableError means Anubis could not be reached, or answered that it is
-// not ready. Retry with backoff.
+// not ready — or that this instance cannot serve the call and another may,
+// which is what any refusal Connect classes as "unavailable" says, whatever
+// its own code (stream_unavailable, from an instance not watching snapshots,
+// is one). Retry with backoff; behind a load balancer the retry may land on an
+// instance that can.
 //
 // A readiness refusal is deliberate: an instance whose snapshot has outlived
 // its maximum age fails /readyz first, so it leaves the load balancer before
@@ -254,9 +266,20 @@ func classify(e *APIError, header http.Header) error {
 		return &AuthError{err: e}
 	case codeUnavailable:
 		return &UnavailableError{err: e}
-	default:
-		return e
 	}
+
+	// A domain code this client has no case for keeps its transport class.
+	// Only one class is read back, because only one means the same thing
+	// whatever the code: "unavailable" is the server saying this instance
+	// cannot serve the call and another may — stream_unavailable from an
+	// instance not watching snapshots, feed_unavailable, and whatever joins
+	// them — which is exactly what UnavailableError tells a caller to retry.
+	// The other classes cover codes whose remedies differ, so an unknown one
+	// stays an APIError rather than be given a meaning it may not have.
+	if e.class == codeUnavailable {
+		return &UnavailableError{err: e}
+	}
+	return e
 }
 
 // retryAfter reads the delay the server asked for. A header this client cannot

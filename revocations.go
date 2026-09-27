@@ -102,6 +102,11 @@ func (r Revocation) ObservedAt() time.Time { return unix(int64(r.Observed)) }
 // own tenant whatever it passes here.
 //
 // The call blocks. Cancelling ctx is how it is stopped, and returns ctx.Err().
+//
+// An [UnavailableError] is the one to reconnect on: a dropped connection, and
+// also an instance that is not watching snapshots and so has nothing to
+// stream, which refuses with the code stream_unavailable — another instance
+// may serve the reconnect.
 func (c *Client) StreamRevocations(ctx context.Context, tenant string, fn func(Revocation) error) error {
 	body, err := json.Marshal(map[string]any{"tenant": tenant})
 	if err != nil {

@@ -1240,11 +1240,12 @@ message AuditEntry {
 
 message QueryAuditRequest {
   string actor_id = 1;
-  string action = 2;
+  string action = 2;   // substring match, case-insensitive; empty = any
   int64 from = 3;  // unix seconds; 0 = unbounded
   int64 to = 4;
   int32 page_size = 5;
   string page_token = 6;
+  string result = 7;   // allow | deny | error; empty = any
 }
 
 message QueryAuditResponse {
@@ -1395,6 +1396,30 @@ service PlatformAdminService {
   // SetOperatorStatus disables or restores a platform user. Disabling takes
   // effect on their live tokens, not when those tokens expire.
   rpc SetOperatorStatus(SetOperatorStatusRequest) returns (SetOperatorStatusResponse);
+  // ResetOperatorPassword sets a temporary password for somebody who has
+  // lost theirs. ChangePlatformPassword covers the case where they still
+  // know it; this covers the case where they do not, and used to have no
+  // answer but disable-and-recreate.
+  //
+  // The temporary password is returned ONCE, in this response. It is
+  // generated rather than supplied: a password chosen by the person doing
+  // the resetting is a password somebody chose in a hurry.
+  //
+  // This is not a new privilege. CreateAPIKey already mints, for any
+  // operator named in the request, a credential that administers as its
+  // owner — behind this same permission. What a reset adds is that the
+  // target loses their own access until they are told the new password, so
+  // it ends their live sessions and is audited with both names.
+  rpc ResetOperatorPassword(ResetOperatorPasswordRequest) returns (ResetOperatorPasswordResponse);
+}
+
+message ResetOperatorPasswordRequest {
+  string operator_id = 1;
+}
+
+message ResetOperatorPasswordResponse {
+  // Shown once and never stored in readable form. Hand it over out of band.
+  string temporary_password = 1;
 }
 
 // OperatorAssignment is one operator's authority over one tenant. An empty
@@ -1544,7 +1569,28 @@ service PlatformAuthService {
   rpc ConfirmTotpEnrolment(ConfirmTotpEnrolmentRequest) returns (ConfirmTotpEnrolmentResponse);
   // MyTenants is which tenants this operator may administer.
   rpc MyTenants(MyTenantsRequest) returns (MyTenantsResponse);
+  // ChangePlatformPassword rotates the caller's own password.
+  //
+  // It exists because nothing else could: an operator password was written
+  // once at install or at CreateOperator and no route changed it, so the
+  // remedy for a suspected compromise was to disable the account and build
+  // another, losing its assignments.
+  //
+  // Every outstanding token for this operator stops working, including the
+  // caller's own. That is the point rather than a side effect: somebody
+  // changing their password because it leaked needs the sessions opened with
+  // it to end, and singling out their current one would leave the attacker's.
+  rpc ChangePlatformPassword(ChangePlatformPasswordRequest) returns (ChangePlatformPasswordResponse);
 }
+
+message ChangePlatformPasswordRequest {
+  // The current password, re-presented. A stolen ACCESS TOKEN must not be
+  // enough to take an account over permanently.
+  string current_password = 1;
+  string new_password = 2;
+}
+
+message ChangePlatformPasswordResponse {}
 
 message PlatformLoginRequest {
   // No tenant. Platform usernames are globally unique because an operator

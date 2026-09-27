@@ -2,6 +2,9 @@ package anubis_test
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -637,4 +640,98 @@ func TestScopeDenialsAreToldApart(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAccountManagementNeedsAFirstPartyToken covers the rule Anubis v0.4.3
+// added: listing a person's sessions, signing them out everywhere, and ending
+// one of their OTHER sessions are the account holder's actions, and a token
+// minted for an application — the one an app receives when the person signs
+// in to it — is refused for them. Nothing in the SDK's code changed for this;
+// what the test pins is the path its documentation now promises, from the
+// server's own refusal: an AuthError, carrying the permission_denied code and
+// the server's hint in APIError.Details, reachable with errors.As.
+func TestAccountManagementNeedsAFirstPartyToken(t *testing.T) {
+	hints := map[string]string{
+		"/anubis.v1.SessionService/ListSessions":  "list sessions with a token Anubis issued for itself",
+		"/anubis.v1.AuthService/LogoutAll":        "sign out everywhere with a token Anubis issued for itself",
+		"/anubis.v1.AuthService/LogoutSession":    "sign out another session with a token Anubis issued for itself",
+		"/anubis.v1.SessionService/RevokeSession": "sign out another session with a token Anubis issued for itself",
+	}
+	var presented sync.Map
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hint, ok := hints[r.URL.Path]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		presented.Store(r.URL.Path, r.Header.Get("Authorization"))
+		// The server's shape: Connect's coarse class, the domain error's own
+		// text as the message, and the stable code and the hint in ErrorInfo.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"code":    "permission_denied",
+			"message": "permission_denied: Permission denied (hint=" + hint + ")",
+			"details": []map[string]any{{
+				"type":  "anubis.v1.ErrorInfo",
+				"value": errorInfoWire("permission_denied", "req_sessions", map[string]string{"hint": hint}),
+			}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := anubis.New(srv.URL, anubis.WithApplication(app, ""), anubis.WithTenant("impack"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := signedIn("usr_1") // a token the application's own middleware verified
+	for name, call := range map[string]func() error{
+		"/anubis.v1.SessionService/ListSessions":  func() error { _, err := c.Sessions(ctx); return err },
+		"/anubis.v1.AuthService/LogoutAll":        func() error { return c.LogoutAll(ctx) },
+		"/anubis.v1.AuthService/LogoutSession":    func() error { return c.LogoutSession(ctx, "ses_other") },
+		"/anubis.v1.SessionService/RevokeSession": func() error { return c.RevokeSession(ctx, "ses_other") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := call()
+			var authErr *anubis.AuthError
+			if !errors.As(err, &authErr) {
+				t.Fatalf("want an AuthError — the remedy is a different credential — got %T: %v", err, err)
+			}
+			var apiErr *anubis.APIError
+			if !errors.As(err, &apiErr) {
+				t.Fatalf("the AuthError does not wrap the server's refusal: %v", err)
+			}
+			if apiErr.Code != "permission_denied" {
+				t.Errorf("code = %q, want permission_denied", apiErr.Code)
+			}
+			if got := apiErr.Details["hint"]; got != hints[name] {
+				t.Errorf("hint = %q, want the server's %q", got, hints[name])
+			}
+			if got, _ := presented.Load(name); got != "Bearer v4.public.test" {
+				t.Errorf("presented %v, want the verified principal's token", got)
+			}
+		})
+	}
+}
+
+// errorInfoWire writes anubis.v1.ErrorInfo on the protobuf wire, details map
+// included — string code = 1, string request_id = 2, map<string,string>
+// details = 3, each map entry a message of key = 1, value = 2 — and base64s it
+// the way Connect puts a detail in JSON.
+func errorInfoWire(code, requestID string, details map[string]string) string {
+	field := func(b []byte, number int, value []byte) []byte {
+		b = binary.AppendUvarint(b, uint64(number)<<3|2)
+		b = binary.AppendUvarint(b, uint64(len(value)))
+		return append(b, value...)
+	}
+	var out []byte
+	out = field(out, 1, []byte(code))
+	out = field(out, 2, []byte(requestID))
+	for k, v := range details {
+		var entry []byte
+		entry = field(entry, 1, []byte(k))
+		entry = field(entry, 2, []byte(v))
+		out = field(out, 3, entry)
+	}
+	return base64.StdEncoding.EncodeToString(out)
 }

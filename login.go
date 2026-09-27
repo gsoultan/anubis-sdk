@@ -242,6 +242,26 @@ func (c *Client) CompleteLogin(ctx context.Context, w http.ResponseWriter, r *ht
 // For first-party native and CLI applications only. A third-party application
 // collecting a password is a phishing lesson taught to your own users; send
 // those through BeginLogin instead.
+//
+// Which tokens come back depends on whether the sign-in names an application.
+// Naming one — Credentials.ClientID, or failing that the client's
+// [WithApplication] slug — mints them for that application: its audience, its
+// lifetimes. Naming none mints them for Anubis itself, audience "anubis",
+// and only those are FIRST-PARTY tokens: the kind Anubis requires for managing
+// the account behind a session — [Client.Sessions], [Client.LogoutAll] and
+// ending another session from v0.4.3, enrolling an authenticator from v0.4.2.
+// Because an empty ClientID falls back to the client's slug, a first-party
+// sign-in needs a Client built without WithApplication.
+//
+// Present the token by putting it on the context with [WithPrincipal]:
+//
+//	ctx = anubis.WithPrincipal(ctx, &anubis.Principal{Token: result.Tokens.AccessToken})
+//	sessions, err := console.Sessions(ctx)
+//
+// That context carries a token nothing on your side has verified. Anubis
+// verifies it on every call, so it is sound for calling Anubis — but keep it
+// away from your own authorization, which should only ever read a principal
+// the middleware put there.
 func (c *Client) Login(ctx context.Context, cred Credentials) (*LoginResult, error) {
 	req := map[string]any{
 		"tenant":    firstNonEmpty(cred.Tenant, c.opts.tenant),

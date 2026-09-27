@@ -25,7 +25,13 @@ concept, and that is why — so does anything else that speaks both.
 
 **Requests may use either spelling.** protojson accepts both the proto field
 name and lowerCamelCase on input, so `client_id` and `clientId` both work. The
-The SDK sends proto names, which is what the API documentation shows.
+SDK sends proto names, which is what the API documentation shows.
+
+**`POST /v1/login` is a form's target, not an API.** It is where the hosted
+sign-in page submits, and from v0.4.0 it refuses a submission that lacks the
+CSRF token that page carries and the cookie set alongside it — so a script
+posting credentials straight at it stops working. Sign in from code through
+`AuthService.Login`.
 
 **int64 is a JSON string.** protojson renders 64-bit integers quoted, because a
 JSON number cannot hold the range:
@@ -67,6 +73,30 @@ scope, and no permission can be granted to change that.
 A platform operator naming the tenant they are administering adds
 `X-Anubis-Tenant: <slug>`. Sending **no** such header on an admin audit query
 is how you ask about the installation itself rather than about a tenant.
+
+### First-party tokens
+
+An end user's access token is minted **for an application** — `aud` is the
+application's slug — whenever the sign-in named one: the browser flow always
+does, and `AuthService.Login` does when its request carries a `client_id`. A
+sign-in that names no application mints a token for **Anubis itself**, `aud`
+`["anubis"]`: a first-party token.
+
+Managing the account behind a session takes a first-party token. A token an
+application was handed at sign-in must not let it list the person's other
+sessions, sign them out of every other application, or bind a way in of its
+own:
+
+| Procedure | Needs a first-party token | Since |
+| :--- | :--- | :--- |
+| `SessionService.ListSessions` | always | v0.4.3 |
+| `AuthService.LogoutAll` | always | v0.4.3 |
+| `AuthService.LogoutSession`, `SessionService.RevokeSession` | for any session but the token's own | v0.4.3 |
+| `AuthService.BeginTotpEnrollment`, `ConfirmTotpEnrollment`, `EnrollDeviceKey` | always, signed in within the last ten minutes — except TOTP on the enrol-grant path, which takes no session | v0.4.2 |
+
+`Logout` and `GetMe` take any token. The refusal is `permission_denied`, with a
+`hint` in the `ErrorInfo` details naming the token it wanted; a stale sign-in on
+the enrolment path is `step_up_required` with `max_auth_age`.
 
 ## Errors
 
@@ -113,11 +143,18 @@ indistinguishable from a bad password.
 `account_locked` · `account_disabled` · `device_challenge_invalid` ·
 `registration_closed` · `password_policy` · `no_tenant_selected` ·
 `rate_limited` · `permission_denied` · `unauthenticated` · `not_found` ·
-`conflict` · `feed_unavailable` · `internal`
+`conflict` · `invalid_argument` · `bad_page_token` · `feed_unavailable` ·
+`stream_unavailable` · `internal`
 
 `refresh_token_reuse_detected` is the one that must page a human. It means two
 parties presented the same refresh token; the family and session are already
 revoked. It is not retryable.
+
+The `…_unavailable` codes travel as Connect's `unavailable` and mean *not this
+instance, and not now*: `stream_unavailable` is an instance that is not
+watching snapshots and has nothing to stream, while another instance may. A
+client that branches on the domain code must still retry on the class — the SDK
+does, whatever the code, so a code added later is retried too.
 
 ## The flows
 
@@ -276,6 +313,16 @@ POST /anubis.v1.AuthService/Refresh    { "refresh_token": "anb_rt_…" }
 Returns a rotated pair; the presented token is dead. Presenting a consumed one
 revokes the family and the session and answers
 `refresh_token_reuse_detected`.
+
+The pair is re-issued for the application the family was issued to — its
+audience, format and lifetimes — whatever the request names (v0.4.2). Before
+that, every rotation minted a token for `anubis`, which a verifier bound to the
+application's audience refuses, and a family issued before a server's upgrade
+to v0.4.2 still rotates that way: nothing recorded its application.
+
+`POST /v1/token` with `grant_type=refresh_token&refresh_token=…`, form-encoded,
+is the same rotation through the OAuth door (v0.4.2), answering in the
+exchange's snake_case shape. Reuse detection holds identically on both.
 
 **Serialise refreshes.** Two concurrent requests that both refresh will produce
 this refusal against your own users. It is not a race to tolerate — it is

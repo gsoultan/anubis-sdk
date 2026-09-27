@@ -167,6 +167,64 @@ func TestStreamRevocationsReportsAnEndOfStreamError(t *testing.T) {
 	}
 }
 
+// TestStreamRevocationsFromAnInstanceThatDoesNotStream: root cause — the
+// domain code in ErrorInfo replaced Connect's transport class, and classify did
+// not know "stream_unavailable", so an instance saying "not me, another can
+// serve this" came back as a bare APIError. A consumer that reconnects on
+// UnavailableError — the SDK's own advice for a gap — gave up instead of
+// landing on an instance that streams.
+//
+// The frame is the real server's: Connect's class, and the domain code in an
+// ErrorInfo detail beside it.
+func TestStreamRevocationsFromAnInstanceThatDoesNotStream(t *testing.T) {
+	raw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/connect+json")
+		w.WriteHeader(http.StatusOK)
+		w.Write(connectFrame(0x02, `{"error":{"code":"unavailable",`+
+			`"message":"stream_unavailable: Revocation streaming is not enabled on this instance",`+
+			`"details":[{"type":"anubis.v1.ErrorInfo","value":"`+
+			errorInfoWire("stream_unavailable", "req_stream", nil)+`"}]}}`))
+	}))
+	defer raw.Close()
+
+	c, err := anubis.New(raw.URL, anubis.WithApplication(app, ""), anubis.WithAPIKey("anb_live_x"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	err = c.StreamRevocations(context.Background(), "impack", func(anubis.Revocation) error { return nil })
+	var unavailable *anubis.UnavailableError
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("error = %v (%T), want an *anubis.UnavailableError: reconnecting may reach an instance that streams", err, err)
+	}
+	var apiErr *anubis.APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != "stream_unavailable" {
+		t.Errorf("the server's own code is lost: %v", err)
+	}
+}
+
+// TestAReconnectLandsOnAnInstanceThatStreams is the same refusal through the
+// fake, the way a consumer meets it behind a load balancer: refused as
+// unavailable by an instance not watching snapshots, reconnect, served.
+func TestAReconnectLandsOnAnInstanceThatStreams(t *testing.T) {
+	s := newTestServer(t)
+	c := newClient(t, s)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	s.RefuseStreams(true)
+	err := c.StreamRevocations(ctx, "impack", func(anubis.Revocation) error { return nil })
+	var unavailable *anubis.UnavailableError
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("error = %v (%T), want an *anubis.UnavailableError", err, err)
+	}
+
+	s.RefuseStreams(false)
+	events, _ := watch(t, ctx, c, "impack")
+	if synced := nextRevocation(t, events); synced.Kind != anubis.RevocationSynced {
+		t.Fatalf("first message after reconnecting = %q, want %q", synced.Kind, anubis.RevocationSynced)
+	}
+}
+
 // TestStreamRevocationsRefusalIsTyped proves the closing frame still reaches
 // classify: an unauthenticated stream has to arrive as an AuthError, like
 // every other unauthenticated call, and not as an opaque transport failure.

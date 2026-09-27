@@ -355,6 +355,13 @@ func (c *Client) Me(ctx context.Context) (*Me, error) {
 }
 
 // Sessions lists the caller's signed-in devices.
+//
+// It needs a first-party token — one Anubis issued for itself, whose audience
+// includes "anubis"; see [Client.Login]. The list names every session the
+// person holds, each application's and each device's with its address, and
+// that is the account holder's own view: a token minted for an application is
+// refused with an [AuthError] carrying "permission_denied" and the server's
+// hint, from Anubis v0.4.3. [Client.Me] has no such rule.
 func (c *Client) Sessions(ctx context.Context) ([]Session, error) {
 	var out struct {
 		Sessions []Session `json:"sessions"`

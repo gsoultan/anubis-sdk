@@ -520,6 +520,17 @@ paperwork.
 - `TokenService` gained `StreamRevocations`, the first streaming procedure the
   SDK speaks (§8).
 
+The check against the v0.4.4 release on 2026-09-27 found the other half of
+the problem. The proto had barely moved — one added filter, two procedures
+this SDK does not wrap — and `drift.sh` said so accurately, while a release
+earlier the server had changed who may call four procedures the SDK does wrap,
+without touching a single `.proto` file: an application's token stopped
+being enough to list or end a person's other sessions. A second change had
+fixed a refresh that re-issued an application's tokens for the wrong
+audience. A proto diff cannot see either. So the drift check is necessary and
+not sufficient, and the rest of a round is reading the server's CHANGELOG for
+every release since the last one — the "Action required" lines above all.
+
 ---
 
 ## 7. Three decisions this design asks you to make

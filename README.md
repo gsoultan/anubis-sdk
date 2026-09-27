@@ -51,6 +51,10 @@ only consumes tokens never constructs the second one.
 
 ## Getting set up
 
+It needs **Anubis v0.4.0 or later**, and v0.4.2 or later if a `TokenSource`
+refreshes your application's tokens: before that release a refresh re-issued
+them for Anubis itself, and your verifier refuses those.
+
 Register your application in the console under **Access → Applications**. You
 need its `slug` — which is also its `client_id`, and the `aud` its tokens carry
 — plus exact `redirect_uris`, a separate `post_logout_redirect_uris` allowlist,
@@ -154,16 +158,31 @@ and "not connected" are different things.
 
 ```go
 // service credential: this is a whole tenant's session state
-go client.StreamRevocations(ctx, "impack", func(r anubis.Revocation) error {
-    switch r.Kind {
-    case anubis.RevocationSession:
-        sessions.Drop(r.Session)
-    case anubis.RevocationEpoch:
-        sessions.DropIssuedBefore(r.Subject, r.Epoch)
+go func() {
+    for ctx.Err() == nil {
+        err := client.StreamRevocations(ctx, "impack", func(r anubis.Revocation) error {
+            switch r.Kind {
+            case anubis.RevocationSession:
+                sessions.Drop(r.Session)
+            case anubis.RevocationEpoch:
+                sessions.DropIssuedBefore(r.Subject, r.Epoch)
+            }
+            return nil
+        })
+        var gap *anubis.UnavailableError
+        if err != nil && !errors.As(err, &gap) && ctx.Err() == nil {
+            log.Printf("revocations: %v", err) // a refusal to fix, not a gap to wait out
+            return
+        }
+        time.Sleep(5 * time.Second) // then reconnect, and re-check what the gap hid
     }
-    return nil
-})
+}()
 ```
+
+A stream ends — the connection drops, or the instance serving it does not
+stream — and the consumer reconnects: an `UnavailableError` or a clean end
+means go again, possibly to another instance behind the load balancer.
+Anything else is a refusal that retrying will not fix.
 
 ## Repository layout
 
@@ -223,7 +242,7 @@ revocations, client credentials:
 
 | Module | Tests | |
 | :--- | ---: | :--- |
-| root (`.`, `keys`, `paseto`, `admin`, `examples`) | 124 | `go test -race ./...` |
+| root (`.`, `keys`, `paseto`, `admin`, `examples`) | 127 | `go test -race ./...` |
 | `anubiskit` (HTTP, gRPC, AMQP) | 21 | `cd anubiskit && go test -race ./...` |
 
 Two modules, one command:

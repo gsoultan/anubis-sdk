@@ -44,7 +44,8 @@ func (c *Client) LogoutURL(p LogoutParams) string {
 	return c.baseURL + pathLogout + "?" + q.Encode()
 }
 
-// Logout ends the calling session — this device only.
+// Logout ends the calling session — this device only. Any token may end its
+// own session, whoever it was issued for.
 func (c *Client) Logout(ctx context.Context) error {
 	return c.rpc(ctx, procLogout, struct{}{}, nil)
 }
@@ -53,17 +54,31 @@ func (c *Client) Logout(ctx context.Context) error {
 //
 // This is what triggers back-channel logout: Anubis POSTs a signed logout
 // token to every application that registered a backchannel_logout_uri.
+//
+// It needs a first-party token: one Anubis issued for itself, whose audience
+// includes "anubis" — see [Client.Login]. A token minted for an application,
+// which is what an application receives when somebody signs in to it, is
+// refused with an [AuthError] whose [APIError] carries the code
+// "permission_denied" and the server's reason under Details["hint"]. Signing
+// a person out of every OTHER application is the account holder's action, not
+// something an application does with the token it was handed. Anubis v0.4.3
+// and later; earlier releases accepted any token.
 func (c *Client) LogoutAll(ctx context.Context) error {
 	return c.rpc(ctx, procLogoutAll, struct{}{}, nil)
 }
 
 // LogoutSession ends one named session — the "sign out that other device"
 // button on a session list.
+//
+// Ending the token's OWN session is [Client.Logout] by another name and works
+// with any token. Ending a DIFFERENT one needs a first-party token, as
+// [Client.LogoutAll] does, from Anubis v0.4.3.
 func (c *Client) LogoutSession(ctx context.Context, sessionID string) error {
 	return c.rpc(ctx, procLogoutSession, map[string]any{"session_id": sessionID}, nil)
 }
 
-// RevokeSession is LogoutSession from the user's own session list.
+// RevokeSession is LogoutSession from the user's own session list, under the
+// same rule: any token for its own session, a first-party one for another.
 func (c *Client) RevokeSession(ctx context.Context, sessionID string) error {
 	return c.rpc(ctx, procRevokeSession, map[string]any{"session_id": sessionID}, nil)
 }

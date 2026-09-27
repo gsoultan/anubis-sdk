@@ -81,6 +81,9 @@ type Server struct {
 	// first.
 	revSubs map[int64]chan RevocationRow
 	revSeq  int64
+	// refuseStreams makes StreamRevocations answer as an instance that is
+	// not watching snapshots does. See RefuseStreams.
+	refuseStreams bool
 	// Calls counts procedure hits, so a test can assert that concurrent
 	// callers produced exactly one refresh.
 	Calls map[string]int

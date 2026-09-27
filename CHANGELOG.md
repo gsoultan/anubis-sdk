@@ -13,6 +13,55 @@ integration-plane protos were byte-identical. Nothing detects this drift and
 nothing can — see DESIGN §6 — so each round is a hunt for what the client now
 gets wrong, not a copy.
 
+Then checked again against the **Anubis v0.4.4 release** (2026-09-27). The
+contract vendored above is what v0.4.0 shipped, and since then only
+`admin.proto` moved — a `result` filter on `QueryAudit` and two operator
+password procedures, none of which this SDK wraps. What changed for callers
+came from behaviour that moved without a proto: which token may manage an
+account, and what a refresh re-issues. One old bug turned up on the way.
+
+### Requires
+
+- **Anubis v0.4.0 or later.** It is the first release carrying what this SDK
+  speaks — `StreamRevocations`, `GrantScope.exclude`, `ScopeNode.child_count`
+  and the `scope_excluded` deny reason; against v0.3.1 the stream is a route
+  that does not exist and the rest decode as zero values.
+- **v0.4.2 or later for a `TokenSource` holding an application's tokens.**
+  Before it, every refresh re-issued the pair for Anubis itself, and since a
+  `Verifier` always checks the audience, the session died at its first
+  refresh — ten minutes in.
+
+### Changed
+
+- **Managing an account takes a first-party token, and the documentation now
+  says so.** From Anubis v0.4.3, `Sessions`, `LogoutAll`, and `LogoutSession`
+  or `RevokeSession` for any session but the token's own, refuse a token
+  minted for an application — the one an application is handed when somebody
+  signs in to it — so that a relying party cannot list a person's other
+  sessions or sign them out of every other application. The refusal arrives as
+  an `AuthError` whose `APIError` carries `permission_denied` and the server's
+  reason in `Details["hint"]`; a test pins that path from the server's own
+  wire shape.
+
+  `Login`'s documentation now says which tokens it returns, because the answer
+  decides whether those calls work: naming an application mints the
+  application's, naming none mints Anubis's own, and an empty
+  `Credentials.ClientID` falls back to the client's `WithApplication` slug — so
+  a first-party sign-in needs a `Client` built without one. Enrolling an
+  authenticator follows the same rule from v0.4.2, which `WIRE.md` records.
+- **`Refresh` documents what a rotation re-issues**: the application's
+  audience, format and lifetimes, from v0.4.2 — and the one case that still
+  rotates the old way after an upgrade, a refresh token issued before it,
+  whose application was never recorded.
+- `docs/WIRE.md` gains the first-party rule and which procedures it covers,
+  the refresh grant `POST /v1/token` now serves, the CSRF token `POST
+  /v1/login` has needed since v0.4.0, and three error codes it was missing:
+  `invalid_argument`, `bad_page_token` and `stream_unavailable`.
+- `admin.proto` re-vendored from v0.4.4. `QueryAudit` matches `action` as a
+  case-insensitive substring and takes a `result` filter; `ChangePlatformPassword`
+  and `ResetOperatorPassword` are new. None is wrapped here; `Client.Call`
+  reaches any of them.
+
 ### Added
 
 - `Client.StreamRevocations` watches a tenant's revocations, so a resource
@@ -26,6 +75,11 @@ gets wrong, not a copy.
 - `anubistest.Server.PushRevocation` and `anubistest.RevocationRow` drive that
   stream from a test, framing included — the framing is the half with nowhere
   else to be exercised.
+- `anubistest.Server.RefuseStreams` answers the stream as an instance that is
+  not watching snapshots does, so a consumer's reconnect loop can be tested
+  against the refusal it has to survive. The fake's closing frame now carries
+  the domain code in an `ErrorInfo` detail beside Connect's class, as the real
+  server's does — sending only the class is what hid the bug below.
 - `Decision.ScopeExcluded` and `Decision.ScopeMismatch`. Anubis split the deny
   reason `scope_excluded` out of `scope_mismatch`, and the split matters: a
   mismatch means no grant ever reached the target, an exclusion means one did
@@ -45,6 +99,21 @@ gets wrong, not a copy.
   repository is private — so this closes the remembering, not the gap.
 
 ### Fixed
+
+- **An instance that does not stream revocations was a dead end.** The server
+  refuses `StreamRevocations` with `stream_unavailable` from an instance that is
+  not watching snapshots — classed by Connect as `unavailable`, meaning
+  another instance can serve it. The SDK read the domain code out of
+  `ErrorInfo`, which displaced the class, and did not know the code, so the
+  refusal came back as a bare `APIError` instead of the `UnavailableError`
+  a consumer reconnects on. Behind a load balancer, the consumer gave up rather
+  than landing on an instance that streams.
+
+  Fixed by keeping the class: a refusal Connect calls `unavailable` is an
+  `UnavailableError` whatever its domain code, so `feed_unavailable`, and any
+  code of that kind added later, is retried too. Only that class is read back;
+  the others cover codes whose remedies differ, and an unknown one stays an
+  `APIError` rather than be given a meaning it may not have.
 
 - `admin.Grant.Nodes` counted an exclusion as a reach. Once the server began
   sending carve-outs, an access review rendered the one node somebody had gone

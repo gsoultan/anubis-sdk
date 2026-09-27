@@ -178,6 +178,14 @@ func (ts *TokenSource) valid() bool {
 //
 // Prefer TokenSource, which serialises this. Calling Refresh directly from
 // concurrent request handlers is how a client reports itself for theft.
+//
+// The new pair is for the application the old one was issued to — the same
+// audience, format and lifetimes — from Anubis v0.4.2. Earlier releases
+// re-issued every refreshed token for Anubis itself, audience "anubis", which
+// a verifier bound to the application's audience refuses: the session died at
+// its first refresh. A refresh token issued before the server was upgraded to
+// v0.4.2 still rotates that old way, because which application it belonged to
+// was never recorded; its holder has to sign in once more.
 func (c *Client) Refresh(ctx context.Context, refreshToken string) (*Tokens, error) {
 	if refreshToken == "" {
 		return nil, errors.New("anubis: refresh needs a refresh token")

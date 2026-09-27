@@ -64,13 +64,13 @@ fi
 SERVER=${ANUBIS_SERVER:-../anubis}
 if [ -d "$SERVER/proto/anubis/v1" ]; then
   if drift=$(scripts/drift.sh "$SERVER" 2>&1); then
-    ok "proto/ matches the server contract"
+    ok "proto/ matches the server, and no release since is unread"
   else
-    bad "proto/ matches the server contract"
+    bad "proto/ matches the server, and no release since is unread"
     printf '%s\n' "$drift" | sed 's/^/  /'
   fi
 else
-  skip "proto/ matches the server contract" "no server checkout at $SERVER"
+  skip "proto/ matches the server, and no release since is unread" "no server checkout at $SERVER"
 fi
 
 run "go vet (root)" go vet ./...

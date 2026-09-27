@@ -118,7 +118,11 @@ type Credentials struct {
 	Realm    string // empty means "internal"
 	Username string
 	Password string
-	ClientID string // the application slug the tokens are minted for
+	// ClientID is the application the tokens are minted for; empty falls back
+	// to the client's WithApplication slug. With neither, the tokens are
+	// Anubis's own — first-party — which is what managing the account needs
+	// (see Client.Login).
+	ClientID string
 	DeviceFP string
 }
 
