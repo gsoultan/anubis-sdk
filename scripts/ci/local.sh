@@ -64,7 +64,16 @@ fi
 SERVER=${ANUBIS_SERVER:-../anubis}
 if [ -d "$SERVER/proto/anubis/v1" ]; then
   if drift=$(scripts/drift.sh "$SERVER" 2>&1); then
-    ok "proto/ matches the server, and no release since is unread"
+    # drift.sh passes when the files match and it could not list releases —
+    # an exported tree has no tags — so the release half is only claimed when
+    # it actually ran.
+    if printf '%s\n' "$drift" | grep -q 'not checked'; then
+      ok "proto/ matches the server"
+      skip "no server release since proto/SYNCED is unread" \
+        "$(printf '%s\n' "$drift" | sed -n 's/^.*skip[^ ]* //p' | head -1)"
+    else
+      ok "proto/ matches the server, and no release since is unread"
+    fi
   else
     bad "proto/ matches the server, and no release since is unread"
     printf '%s\n' "$drift" | sed 's/^/  /'
