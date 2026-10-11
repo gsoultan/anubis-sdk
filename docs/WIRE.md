@@ -320,6 +320,26 @@ that, every rotation minted a token for `anubis`, which a verifier bound to the
 application's audience refuses, and a family issued before a server's upgrade
 to v0.4.2 still rotates that way: nothing recorded its application.
 
+## Client credentials
+
+```
+POST /anubis.v1.AuthService/ClientCredentials
+{ "tenant": "…", "client_id": "…", "client_secret": "…", "audience": "…" }
+```
+
+Returns `{ accessToken, tokenType, expiresIn }` and no refresh token.
+
+`audience` is not taken on trust (v0.4.5). An empty one means the
+application's own slug; any other must appear in the application's
+`allowedAudiences` (`repeated string allowed_audiences = 13` on the
+`Application` message, empty by default) or the call is refused
+`permission_denied` with `details.hint` naming the fix. Before v0.4.5 any
+audience was minted, so a client of one application could mint a token a
+sibling accepted. **An application whose machine tokens call another must have
+that audience added**, and because `UpdateApplication` rewrites the whole
+record, a client that updates an application must send `allowedAudiences` back
+or it clears the list.
+
 `POST /v1/token` with `grant_type=refresh_token&refresh_token=…`, form-encoded,
 is the same rotation through the OAuth door (v0.4.2), answering in the
 exchange's snake_case shape. Reuse detection holds identically on both.

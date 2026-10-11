@@ -1161,6 +1161,10 @@ message Application {
   string access_token_ttl = 9;
   string refresh_token_ttl = 10;
   int32 manifest_version = 11;
+  // Audiences this app's client_credentials tokens may request beyond its own
+  // slug. Empty means self only; without an entry a machine client cannot
+  // mint a token audienced at another application.
+  repeated string allowed_audiences = 13;
 }
 
 message ListApplicationsRequest {

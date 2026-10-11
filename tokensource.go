@@ -212,6 +212,13 @@ func (c *Client) Refresh(ctx context.Context, refreshToken string) (*Tokens, err
 // Audience is what stops a token minted for one service being replayed against
 // another — the confused deputy the receiving verifier's Audience field exists
 // for. It defaults to the calling application itself.
+//
+// Since Anubis v0.4.5 the server does not take the audience on trust: an
+// application may request its own slug or an audience listed in its
+// [admin.Application].AllowedAudiences, and anything else is refused with
+// permission_denied — surfaced as an [*AuthError] wrapping an [*APIError]
+// whose Details["hint"] says to add the audience. The fix is on the
+// application's record, not in the credential; retrying cannot help.
 func (c *Client) ClientCredentials(ctx context.Context, audience string) (*TokenSource, error) {
 	if c.opts.clientID == "" || c.opts.clientSecret == "" {
 		return nil, errors.New("anubis: client credentials need WithApplication(clientID, clientSecret)")

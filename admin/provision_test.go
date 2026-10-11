@@ -384,3 +384,37 @@ func TestAuthPageCreateDefaultAndDelete(t *testing.T) {
 		t.Error("setting a default needs an id")
 	}
 }
+
+// TestAllowedAudiencesSurviveAReadEditWrite guards the v0.4.5 field. Root
+// cause: UpdateApplication rewrites the whole record, so an Application type
+// that did not carry allowed_audiences would send none on every update and
+// silently take away every audience the app was allowed to mint for.
+func TestAllowedAudiencesSurviveAReadEditWrite(t *testing.T) {
+	_, c := start(t, operatorKey)
+	ctx := context.Background()
+
+	made, err := c.CreateApplication(ctx, admin.Application{
+		Slug: "billing-batch", Name: "Batch", Kind: admin.AppService,
+		AllowedAudiences: []string{"reporting-api"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := made.Application.AllowedAudiences; len(got) != 1 || got[0] != "reporting-api" {
+		t.Fatalf("created allowed audiences = %v", got)
+	}
+
+	page, err := c.Applications(ctx, admin.ApplicationQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited := page.Applications[0]
+	edited.Name = "Batch runner"
+	updated, err := c.UpdateApplication(ctx, edited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := updated.AllowedAudiences; len(got) != 1 || got[0] != "reporting-api" {
+		t.Errorf("a rename dropped the allowed audiences: %v", got)
+	}
+}
