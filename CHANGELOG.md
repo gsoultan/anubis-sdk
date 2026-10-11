@@ -5,7 +5,7 @@ Format follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html), and while the major
 version is 0 the API may still move.
 
-## [Unreleased]
+## [0.2.1] — 2026-10-11
 
 Checked against the **Anubis v0.4.5 release** (2026-09-28). Only `admin.proto`
 moved, by one field; a second change moved without any proto.
