@@ -735,3 +735,39 @@ func errorInfoWire(code, requestID string, details map[string]string) string {
 	}
 	return base64.StdEncoding.EncodeToString(out)
 }
+
+// TestClientCredentialsRefusesAnAudienceTheApplicationNeverOptedInto pins the
+// v0.4.5 rule: a machine client may mint for its own slug or a listed
+// audience. Root cause it guards: before v0.4.5 the audience was whatever the
+// caller sent, so a client of one application could mint a token a sibling
+// would accept. The refusal must reach the caller as an error, not as a token.
+func TestClientCredentialsRefusesAnAudienceTheApplicationNeverOptedInto(t *testing.T) {
+	s := anubistest.NewServer(t)
+	s.AddApplication(anubistest.ApplicationRow{
+		ID: "app_1", Slug: "billing-batch", Name: "Batch", Kind: "service",
+		AllowedAudiences: []string{"reporting-api"},
+	})
+	c, err := anubis.New(s.URL,
+		anubis.WithApplication("billing-batch", "shhh"),
+		anubis.WithTenant("impack"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	for _, aud := range []string{"", "billing-batch", "reporting-api"} {
+		if _, err := c.ClientCredentials(ctx, aud); err != nil {
+			t.Errorf("audience %q should be allowed: %v", aud, err)
+		}
+	}
+
+	_, err = c.ClientCredentials(ctx, "payroll-api")
+	var auth *anubis.AuthError
+	if !errors.As(err, &auth) {
+		t.Fatalf("want AuthError for an unlisted audience, got %v", err)
+	}
+	var api *anubis.APIError
+	if !errors.As(err, &api) || api.Details["hint"] == "" {
+		t.Errorf("refusal should carry the server's hint, got %+v", api)
+	}
+}

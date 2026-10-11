@@ -5,6 +5,38 @@ Format follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html), and while the major
 version is 0 the API may still move.
 
+## [Unreleased]
+
+Checked against the **Anubis v0.4.5 release** (2026-09-28). Only `admin.proto`
+moved, by one field; a second change moved without any proto.
+
+### Requires
+
+- **Anubis v0.4.5 or later to set `AllowedAudiences`.** Earlier servers ignore
+  the field.
+
+### Changed
+
+- `ClientCredentials` can now be refused for the audience it asks for. From
+  v0.4.5 the server mints only for the application's own slug or an audience in
+  its `allowed_audiences`, and answers anything else `permission_denied`
+  (an `*AuthError` wrapping an `*APIError`, hint in `Details`). Previously any
+  audience was minted. **Action required** for an application whose machine
+  tokens call another: add that audience to its `AllowedAudiences`.
+- `admin.proto` re-vendored from v0.4.5.
+
+### Added
+
+- `admin.Application.AllowedAudiences`. Without it, `UpdateApplication` — which
+  rewrites the whole record — would have cleared the list on every rename.
+- `anubistest` enforces the audience rule for registered applications
+  (`ApplicationRow.AllowedAudiences`).
+
+### Not wrapped
+
+- The audit log's actor filter (v0.4.5, server and UI): `QueryAudit` is not
+  wrapped here; `Client.Call` reaches it.
+
 ## [0.2.0] — 2026-09-27
 
 Re-vendored `proto/anubis/v1/` from the server and worked through what had

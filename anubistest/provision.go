@@ -28,6 +28,9 @@ type ApplicationRow struct {
 	ID, Slug, Name, Kind, Status string
 	RedirectURIs                 []string
 	ManifestVersion              int
+	// AllowedAudiences is what the application's client_credentials tokens may
+	// be audienced at besides its own slug.
+	AllowedAudiences []string
 }
 
 // AddTenant registers a tenant.
@@ -118,10 +121,15 @@ func applicationJSON(r *ApplicationRow) map[string]any {
 	if uris == nil {
 		uris = []string{}
 	}
+	aud := r.AllowedAudiences
+	if aud == nil {
+		aud = []string{}
+	}
 	return map[string]any{
 		"id": r.ID, "slug": r.Slug, "name": r.Name, "kind": r.Kind,
 		"status": r.Status, "redirectUris": uris,
-		"manifestVersion": r.ManifestVersion,
+		"manifestVersion":  r.ManifestVersion,
+		"allowedAudiences": aud,
 	}
 }
 
@@ -338,6 +346,7 @@ func (s *Server) createApplication(w http.ResponseWriter, r *http.Request) {
 			Name         string   `json:"name"`
 			Kind         string   `json:"kind"`
 			RedirectURIs []string `json:"redirectUris"`
+			Allowed      []string `json:"allowedAudiences"`
 		} `json:"application"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
@@ -363,6 +372,7 @@ func (s *Server) createApplication(w http.ResponseWriter, r *http.Request) {
 	row := &ApplicationRow{
 		ID: id, Slug: a.Slug, Name: a.Name,
 		Kind: a.Kind, Status: "active", RedirectURIs: a.RedirectURIs,
+		AllowedAudiences: a.Allowed,
 	}
 	s.applications[a.Slug] = row
 
@@ -383,6 +393,7 @@ func (s *Server) updateApplication(w http.ResponseWriter, r *http.Request) {
 			Name         string   `json:"name"`
 			Status       string   `json:"status"`
 			RedirectURIs []string `json:"redirectUris"`
+			Allowed      []string `json:"allowedAudiences"`
 		} `json:"application"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
@@ -398,6 +409,8 @@ func (s *Server) updateApplication(w http.ResponseWriter, r *http.Request) {
 			row.Status = req.Application.Status
 		}
 		row.RedirectURIs = req.Application.RedirectURIs
+		// A rewrite, as on the server: omitting the list clears it.
+		row.AllowedAudiences = req.Application.Allowed
 		writeJSON(w, http.StatusOK, map[string]any{"application": applicationJSON(row)})
 		return
 	}

@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -452,8 +453,28 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) clientCredentials(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) clientCredentials(w http.ResponseWriter, r *http.Request) {
 	s.count("ClientCredentials")
+	var req struct {
+		ClientID string `json:"client_id"`
+		Audience string `json:"audience"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	// As on the server since v0.4.5: a registered application may request its
+	// own slug or an audience it has opted into, nothing else. An application
+	// the fake was never told about keeps the old permissive answer.
+	s.mu.Lock()
+	app := s.applications[req.ClientID]
+	s.mu.Unlock()
+	if app != nil && req.Audience != "" && req.Audience != app.Slug &&
+		!slices.Contains(app.AllowedAudiences, req.Audience) {
+		httpErrorWithDetails(w, http.StatusForbidden, "permission_denied",
+			"audience not allowed", map[string]string{
+				"audience": req.Audience,
+				"hint":     "add it to the application's allowed_audiences to request it",
+			})
+		return
+	}
 	access := s.MintToken(anubis.Claims{
 		Subject: "app_billing-batch", Audience: []string{"reporting-api"},
 	})

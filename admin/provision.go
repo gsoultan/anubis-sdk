@@ -273,6 +273,13 @@ type Application struct {
 	RefreshTokenTTL string `json:"refreshTokenTtl"`
 	// ManifestVersion advances every time a manifest is applied.
 	ManifestVersion int `json:"manifestVersion"`
+	// AllowedAudiences are the audiences this application's client_credentials
+	// tokens may request beyond its own slug (v0.4.5). Empty means self only: a
+	// machine client cannot mint a token audienced at a sibling application.
+	// [Client.UpdateApplication] rewrites the whole record, so an Application
+	// read, edited and sent back carries this with it; one built from scratch
+	// and sent as an update clears the list.
+	AllowedAudiences []string `json:"allowedAudiences"`
 }
 
 // NeedsClientSecret reports whether this kind of application is issued one.
