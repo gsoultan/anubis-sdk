@@ -176,9 +176,22 @@ type Grant struct {
 	// ViaMembership is set when the grant came from a group rather than from
 	// somebody granting it directly. Revoking it means changing the
 	// membership, not the grant.
-	ViaMembership string       `json:"viaMembershipId"`
-	Reason        string       `json:"reason"`
-	Scopes        []GrantScope `json:"scopes"`
+	ViaMembership string `json:"viaMembershipId"`
+	// ViaAssignment names the one assignment that gave the grant, when a
+	// membership did. A person can hold a membership that applies where each
+	// member is assigned at several places; this says which place to take
+	// away, and taking it away leaves the others.
+	ViaAssignment string `json:"viaAssignmentId"`
+	// Reason is why the access was given. From Anubis v0.5.0 a revoke never
+	// writes it; before that the revoke's reason overwrote it, so on a grant
+	// revoked before the upgrade it may still be the revoke's.
+	Reason string `json:"reason"`
+	// RevokeReason is why it was taken away: empty while the grant is live,
+	// or when the revoke gave none. An access review that prints Reason
+	// against a revoked grant is answering "why was this given", which is the
+	// other question.
+	RevokeReason string       `json:"revokeReason"`
+	Scopes       []GrantScope `json:"scopes"`
 }
 
 // IsLive reports whether the grant confers anything at a given moment.
@@ -436,8 +449,20 @@ type Membership struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	MemberCount int    `json:"memberCount"`
+	// MemberCount is people with a current assignment, each counted once
+	// however many places they hold it at.
+	MemberCount int `json:"memberCount"`
+	// AnchorAxis is set when the membership applies WHERE EACH MEMBER IS
+	// ASSIGNED: each member is placed on this axis when added, and the same
+	// membership gives two members different places. Empty means every member
+	// gets the same places. Fixed when the membership is created.
+	AnchorAxis anubis.Axis `json:"anchorAxis"`
 }
+
+// AppliesWhereAssigned reports whether members of this group hold it at a
+// place of their own. For such a group, what one member's grants reach says
+// nothing about another's — read each member's grants, not the group's.
+func (m Membership) AppliesWhereAssigned() bool { return m.AnchorAxis != "" }
 
 // Memberships lists the groups defined for the tenant.
 func (c *Client) Memberships(ctx context.Context) ([]Membership, error) {
@@ -548,6 +573,10 @@ type ScopeNode struct {
 	// control on this, so a tree built from nodes that do not carry it is a
 	// tree that cannot open.
 	ChildCount int `json:"childCount"`
+	// Path names the node's ancestors, from the top of the axis down to its
+	// parent. Anubis fills it on search results only (a ScopeNodeQuery with a
+	// Query), where "Sales" alone does not say which Sales.
+	Path []string `json:"path"`
 }
 
 // HasChildren reports whether the node can be expanded. Listing an axis is
