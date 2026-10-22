@@ -56,6 +56,7 @@ type Server struct {
 	codes       map[string]authCode
 	grants      map[anubis.SubjectID][]GrantRow
 	scopeNodes  []ScopeNodeRow
+	memberships []MembershipRow
 	// scopeNodePage is the ListScopeNodes page size. An axis is paged because
 	// a real one can hold hundreds of thousands of nodes, and a fake that
 	// answers every listing in one page hides a client that never pages.

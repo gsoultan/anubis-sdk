@@ -5,6 +5,45 @@ Format follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html), and while the major
 version is 0 the API may still move.
 
+## [0.2.2] — 2026-10-22
+
+Checked against the **Anubis v0.5.0 release**. Only `admin.proto` moved, and
+of what moved, three fields land on messages this SDK already decodes — the
+dangerous shape, since each compiled and decoded into nothing. Each is now
+verified against a live v0.5.0 server as well as the fake.
+
+### Changed
+
+- **A revoked grant's `Reason` is why it was given, not why it was taken
+  away.** From v0.5.0 a revoke writes its own `revoke_reason` and leaves
+  `reason` alone, so a review printing `Reason` against a revoked grant would
+  have shown the wrong answer to "why was this removed". Read the new
+  `Grant.RevokeReason` for that. Grants revoked before the server upgrade kept
+  both in one column, so their `Reason` may still be the revoke's.
+- `admin.proto` re-vendored from v0.5.0; `proto/SYNCED` is `v0.5.0`.
+
+### Added
+
+- `admin.Grant.ViaAssignment`: the membership assignment that gave the grant.
+  One person can hold a where-assigned membership at several places, and this
+  says which one to take away.
+- `admin.Membership.AnchorAxis` and `Membership.AppliesWhereAssigned`. Such a
+  membership gives each member a place of their own, so one member's grants
+  say nothing about another's.
+- `admin.ScopeNode.Path`: the names above a node, filled on search results so
+  two departments called "Sales" can be told apart.
+- `anubistest`: `GrantRow.Reason`, `RevokeReason` and `ViaAssignment`;
+  `AddMembership` and `ListMemberships`; `ListScopeNodes` honours `query` and
+  fills `path` on search results, as the server does.
+
+### Not wrapped
+
+- v0.5.0's new procedures — `AssignMembership` at a place,
+  `ListMembershipAssignments`, `UpdateScopeNodeType`, `RenameScopeNode`,
+  `RestoreScopeNode`, and `CreateScopeAxis` with a `top_level` — are reached
+  with `Client.Call`. Note from the server's Action required list: a tenant
+  created after v0.5.0 starts with no structures.
+
 ## [0.2.1] — 2026-10-11
 
 Checked against the **Anubis v0.4.5 release** (2026-09-28). Only `admin.proto`

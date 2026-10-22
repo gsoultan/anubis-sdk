@@ -240,6 +240,10 @@ service ScopeAdminService {
   rpc StrictDryRun(StrictDryRunRequest) returns (StrictDryRunResponse);
   rpc ListScopeNodeTypes(ListScopeNodeTypesRequest) returns (ListScopeNodeTypesResponse);
   rpc CreateScopeNodeType(CreateScopeNodeTypeRequest) returns (CreateScopeNodeTypeResponse);
+  // Renames a level and replaces what it may sit under. Code and structure
+  // are fixed. The database refuses a second top level, a parent that is not
+  // a level of the same structure, and removing a rule items rely on.
+  rpc UpdateScopeNodeType(UpdateScopeNodeTypeRequest) returns (UpdateScopeNodeTypeResponse);
   rpc ListScopeNodes(ListScopeNodesRequest) returns (ListScopeNodesResponse);
   // GetScopeNode fetches one node. Without it the console would have to pull
   // an entire axis to display a single selected value.
@@ -255,6 +259,11 @@ service ScopeAdminService {
   rpc EnsureAxisRoot(EnsureAxisRootRequest) returns (EnsureAxisRootResponse);
   rpc MoveScopeNode(MoveScopeNodeRequest) returns (MoveScopeNodeResponse);
   rpc ArchiveScopeNode(ArchiveScopeNodeRequest) returns (ArchiveScopeNodeResponse);
+  // Puts an archived node back in the pickers. Its grants never stopped
+  // deciding, so nobody's access changes.
+  rpc RestoreScopeNode(RestoreScopeNodeRequest) returns (RestoreScopeNodeResponse);
+  // Renames an active node. An archived one is restored first.
+  rpc RenameScopeNode(RenameScopeNodeRequest) returns (RenameScopeNodeResponse);
   // Bulk reconcile keyed on external_ref: add/rename/move/archive, manual
   // nodes untouched. dry=true computes the same report with zero writes.
   rpc UpsertScopeNodes(UpsertScopeNodesRequest) returns (UpsertScopeNodesResponse);
@@ -292,6 +301,10 @@ message ListScopeAxesResponse {
 
 message CreateScopeAxisRequest {
   ScopeAxis axis = 1;
+  // Optional: the structure's top level, created in the same transaction.
+  // Its axis and parent_types are ignored — a top level sits under nothing.
+  // Without one the structure holds no items until such a level is added.
+  ScopeNodeType top_level = 2;
 }
 
 message CreateScopeAxisResponse {
@@ -340,6 +353,14 @@ message CreateScopeNodeTypeResponse {
   ScopeNodeType type = 1;
 }
 
+message UpdateScopeNodeTypeRequest {
+  ScopeNodeType type = 1;  // keyed on code and axis
+}
+
+message UpdateScopeNodeTypeResponse {
+  ScopeNodeType type = 1;
+}
+
 message ScopeNode {
   string id = 1;
   string axis = 2;
@@ -353,6 +374,9 @@ message ScopeNode {
   // How many children this node has. The console gates its expand chevron on
   // this, so a ScopeNode that does not carry it is a tree that cannot open.
   int32 child_count = 10;
+  // Names from the top of the structure down to this node's parent. Filled
+  // on search results only, where "Sales" alone does not say which Sales.
+  repeated string path = 11;
 }
 
 message ListScopeNodesRequest {
@@ -406,6 +430,19 @@ message ArchiveScopeNodeRequest {
 }
 
 message ArchiveScopeNodeResponse {}
+
+message RestoreScopeNodeRequest {
+  string node_id = 1;
+}
+
+message RestoreScopeNodeResponse {}
+
+message RenameScopeNodeRequest {
+  string node_id = 1;
+  string name = 2;
+}
+
+message RenameScopeNodeResponse {}
 
 message SyncRow {
   string ref = 1;         // external_ref; the idempotency key
@@ -532,6 +569,7 @@ service AuthzAdminService {
   rpc AssignMembership(AssignMembershipRequest) returns (AssignMembershipResponse);
   rpc UnassignMembership(UnassignMembershipRequest) returns (UnassignMembershipResponse);
   rpc ResyncMembership(ResyncMembershipRequest) returns (ResyncMembershipResponse);
+  rpc ListMembershipAssignments(ListMembershipAssignmentsRequest) returns (ListMembershipAssignmentsResponse);
   // Registers an application's permission/role/route catalog. Validates,
   // diffs, applies. Removed permissions are deprecated, never deleted.
   rpc ApplyManifest(ApplyManifestRequest) returns (ApplyManifestResponse);
@@ -756,8 +794,16 @@ message Grant {
   int64 revoked_at = 8;
   string granted_by = 9;
   string via_membership_id = 10;
+  // Why the access was given. A revoke never writes it.
   string reason = 11;
   repeated GrantScope scopes = 12;
+  // Why it was taken away: empty while the grant is live, or when the revoke
+  // gave no reason. Grants revoked before migration 0053 kept the two in one
+  // column, so for those `reason` may be the revoke's.
+  string revoke_reason = 13;
+  // The membership assignment that gave this grant, when one did. A person
+  // can hold one membership at several places; this says which.
+  string via_assignment_id = 14;
 }
 
 message ListGrantsRequest {
@@ -784,6 +830,8 @@ message CreateGrantResponse {
 
 message RevokeGrantRequest {
   string grant_id = 1;
+  // Why it is being taken away. Stored as the grant's revoke_reason; the
+  // reason it was given is kept.
   string reason = 2;
 }
 
@@ -801,7 +849,12 @@ message Membership {
   string name = 2;
   string description = 3;
   repeated MembershipEntry entries = 4;
+  // People with a current assignment (one person may hold a where-assigned
+  // membership at several places, and is counted once).
   int32 member_count = 5;
+  // The structure the membership applies in WHERE EACH MEMBER IS ASSIGNED;
+  // empty when it gives every member the same places. Fixed at creation.
+  string anchor_axis = 6;
 }
 
 message ListMembershipsRequest {}
@@ -813,6 +866,9 @@ message ListMembershipsResponse {
 message CreateMembershipRequest {
   string name = 1;
   string description = 2;
+  // Empty: the same places for every member, named on the entries. An axis
+  // code: each assignment names a place on it, and the entries may not.
+  string anchor_axis = 3;
 }
 
 message CreateMembershipResponse {
@@ -832,15 +888,33 @@ message SetMembershipEntriesResponse {
 message AssignMembershipRequest {
   string membership_id = 1;
   string identity_id = 2;
+  // Where, for a membership that applies where each member is assigned: a
+  // node on its anchor axis, at any depth. Required there; refused otherwise.
+  string scope_node_id = 3;
+  // That place only. The default is the place and everything inside it.
+  bool exact = 4;
+  // Unix seconds; 0 = until removed. Every grant the assignment gives ends
+  // with it.
+  int64 valid_until = 5;
+  // Why — kept on the assignment and on each grant it gives.
+  string reason = 6;
 }
 
 message AssignMembershipResponse {
   int32 grants_created = 1;
+  // Empty when the person already held the membership at that place:
+  // repeating an assignment creates nothing.
+  string assignment_id = 2;
 }
 
 message UnassignMembershipRequest {
   string membership_id = 1;
   string identity_id = 2;
+  // One assignment only. When set, membership_id and identity_id are not
+  // read: the person keeps the membership at any other place.
+  string assignment_id = 3;
+  // Why — kept on each grant it revokes.
+  string reason = 4;
 }
 
 message UnassignMembershipResponse {
@@ -853,6 +927,38 @@ message ResyncMembershipRequest {
 
 message ResyncMembershipResponse {
   int32 grants_changed = 1;
+}
+
+// One current assignment of a person to a membership.
+message MembershipAssignment {
+  string id = 1;
+  string membership_id = 2;
+  string membership_name = 3;
+  string anchor_axis = 4;
+  string identity_id = 5;
+  string username = 6;
+  // The place, for a membership that applies where assigned.
+  string scope_node_id = 7;
+  string scope_node_name = 8;
+  bool exact = 9;
+  int64 valid_until = 10;  // 0 = until removed
+  string reason = 11;
+  int64 assigned_at = 12;
+  string assigned_by = 13;
+}
+
+// Current assignments — everybody in one membership, every membership one
+// person holds, or both. Newest first, keyset-paged.
+message ListMembershipAssignmentsRequest {
+  string membership_id = 1;
+  string identity_id = 2;
+  string page_token = 3;
+  int32 page_size = 4;
+}
+
+message ListMembershipAssignmentsResponse {
+  repeated MembershipAssignment assignments = 1;
+  string next_page_token = 2;
 }
 
 message ApplyManifestRequest {

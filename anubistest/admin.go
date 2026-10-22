@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	anubis "github.com/gsoultan/anubis-sdk"
 )
@@ -23,6 +24,13 @@ type GrantRow struct {
 	ValidUntil    int64
 	RevokedAt     int64
 	ViaMembership string
+	// ViaAssignment is the membership assignment that gave the grant: one
+	// person may hold a where-assigned membership at several places.
+	ViaAssignment string
+	// Reason is why it was given and RevokeReason why it was taken away. Since
+	// Anubis v0.5.0 they are two columns and a revoke writes only the second.
+	Reason       string
+	RevokeReason string
 	// Scopes maps an axis to the nodes the grant reaches on it. A grant may
 	// hold SEVERAL nodes on one axis, which is the whole reason entitlement
 	// cannot be expressed as the flat map a token carries.
@@ -57,6 +65,22 @@ type ScopeNodeRow struct {
 	Axis                       anubis.Axis
 }
 
+// MembershipRow is a membership to register with AddMembership.
+type MembershipRow struct {
+	ID, Name, Description string
+	MemberCount           int
+	// AnchorAxis is set for a membership that applies where each member is
+	// assigned (Anubis v0.5.0); empty gives every member the same places.
+	AnchorAxis anubis.Axis
+}
+
+// AddMembership registers a membership, for ListMemberships.
+func (s *Server) AddMembership(m MembershipRow) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.memberships = append(s.memberships, m)
+}
+
 // defaultScopeNodePage is the ListScopeNodes page size a server starts with.
 const defaultScopeNodePage = 50
 
@@ -88,6 +112,27 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/anubis.v1.AuthzAdminService/GetRoleEffective", s.guarded(s.roleEffective))
 	mux.HandleFunc("/anubis.v1.IdentityAdminService/GetIdentity", s.guarded(s.getIdentity))
 	mux.HandleFunc("/anubis.v1.ScopeAdminService/ListScopeNodes", s.guarded(s.listScopeNodes))
+	mux.HandleFunc("/anubis.v1.AuthzAdminService/ListMemberships", s.guarded(s.listMemberships))
+}
+
+func (s *Server) listMemberships(w http.ResponseWriter, _ *http.Request) {
+	s.count("ListMemberships")
+	s.mu.Lock()
+	rows := append([]MembershipRow(nil), s.memberships...)
+	s.mu.Unlock()
+	out := make([]map[string]any, 0, len(rows))
+	for _, m := range rows {
+		row := map[string]any{
+			"id": m.ID, "name": m.Name, "description": m.Description,
+			"memberCount": m.MemberCount,
+		}
+		// protojson leaves an empty string out, as the real server does.
+		if m.AnchorAxis != "" {
+			row["anchorAxis"] = string(m.AnchorAxis)
+		}
+		out = append(out, row)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"memberships": out})
 }
 
 // guarded reproduces Guard.Require: a non-platform caller is refused with the
@@ -187,6 +232,7 @@ func (s *Server) listScopeNodes(w http.ResponseWriter, r *http.Request) {
 	s.count("ListScopeNodes")
 	var req struct {
 		Axis            string `json:"axis"`
+		Query           string `json:"query"`
 		IncludeArchived bool   `json:"include_archived"`
 		PageSize        int    `json:"page_size"`
 		PageToken       string `json:"page_token"`
@@ -209,11 +255,21 @@ func (s *Server) listScopeNodes(w http.ResponseWriter, r *http.Request) {
 		if n.Status == "archived" && !req.IncludeArchived {
 			continue
 		}
-		matched = append(matched, map[string]any{
+		if req.Query != "" && !strings.Contains(strings.ToLower(n.Name), strings.ToLower(req.Query)) {
+			continue
+		}
+		row := map[string]any{
 			"id": n.ID, "axis": string(n.Axis), "name": n.Name,
 			"parentId": n.ParentID, "status": n.Status,
 			"childCount": childCount(all, n, req.IncludeArchived),
-		})
+		}
+		// The real service fills path on search results only (v0.5.0).
+		if req.Query != "" {
+			if path := ancestorNames(all, n); len(path) > 0 {
+				row["path"] = path
+			}
+		}
+		matched = append(matched, row)
 	}
 
 	// Keyset paging, as the real service does it: page_size clamped here, and
@@ -257,6 +313,27 @@ func childCount(all []ScopeNodeRow, parent ScopeNodeRow, includeArchived bool) i
 	return n
 }
 
+// ancestorNames lists the names from the top of the node's axis down to its
+// parent. Bounded by the row count, so a cycle in a test's fixture cannot hang.
+func ancestorNames(all []ScopeNodeRow, n ScopeNodeRow) []string {
+	byID := make(map[string]ScopeNodeRow, len(all))
+	for _, r := range all {
+		if r.Axis == n.Axis {
+			byID[r.ID] = r
+		}
+	}
+	var path []string
+	for id := n.ParentID; id != "" && len(path) < len(all); {
+		p, ok := byID[id]
+		if !ok {
+			break
+		}
+		path = append([]string{p.Name}, path...)
+		id = p.ParentID
+	}
+	return path
+}
+
 func grantJSON(subject string, g GrantRow) map[string]any {
 	scopes := make([]map[string]any, 0)
 	for axis, nodes := range g.Scopes {
@@ -283,6 +360,9 @@ func grantJSON(subject string, g GrantRow) map[string]any {
 		"validUntil":      itoa64(g.ValidUntil),
 		"revokedAt":       itoa64(g.RevokedAt),
 		"viaMembershipId": g.ViaMembership,
+		"viaAssignmentId": g.ViaAssignment,
+		"reason":          g.Reason,
+		"revokeReason":    g.RevokeReason,
 		"scopes":          scopes,
 	}
 }
