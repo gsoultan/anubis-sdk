@@ -272,10 +272,10 @@ type Ask struct {
 // AuthorizeMany asks about several permission/scope pairs at once.
 //
 // This is N round trips with bounded concurrency, not a batch call: Anubis has
-// no batch decision procedure today, and pretending otherwise by hiding the
-// loop would only make the cost harder to see. For a list page of any size,
-// prefer restructuring the question — ask once for the axis nodes the subject
-// holds the permission on, and filter in your own query.
+// no batch decision procedure, and pretending otherwise by hiding the loop
+// would only make the cost harder to see. For a list page of any size, ask
+// GrantedNodes once instead — the places the subject holds the permission on
+// — and filter in your own query.
 func (c *Client) AuthorizeMany(ctx context.Context, asks []Ask) ([]Decision, error) {
 	id, ok := IdentityFromContext(ctx)
 	if !ok {
@@ -304,9 +304,9 @@ func (c *Client) AuthorizeMany(ctx context.Context, asks []Ask) ([]Decision, err
 // SwitchScope re-issues the caller's tokens pinned to a different active
 // scope, without re-authentication. Mirrors AWS AssumeRole.
 //
-// Anubis refuses a scope the caller is not entitled to, so this doubles as the
-// only way an application can find out whether a move is allowed: there is no
-// procedure that lists the nodes somebody may switch to.
+// Anubis refuses a place the caller holds no grant at (permission_denied), so
+// a successful switch means the move was allowed. To offer only places that
+// will succeed, ask GrantedNodes first for the permission the screen needs.
 func (c *Client) SwitchScope(ctx context.Context, scopes Scopes) (*Tokens, error) {
 	var out struct {
 		Tokens *Tokens `json:"tokens"`

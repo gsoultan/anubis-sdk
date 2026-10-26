@@ -48,6 +48,7 @@ type Server struct {
 	// decisions maps "subject|permission" to the answer Authorize gives. The
 	// key is a plain string because it is an index, not a domain value.
 	decisions map[string]anubis.Decision
+	granted   map[string]anubis.GrantedNodes
 	// liveRefresh is the refresh token currently valid for a session; a
 	// presentation of anything else that was ever issued is reuse.
 	liveRefresh map[string]string
@@ -131,6 +132,7 @@ func NewServer(t testing.TB) *Server {
 		public:      pub,
 		secret:      sec,
 		decisions:   map[string]anubis.Decision{},
+		granted:     map[string]anubis.GrantedNodes{},
 		liveRefresh: map[string]string{},
 		issued:      map[string]string{},
 		consumed:    map[string]bool{},
@@ -147,6 +149,7 @@ func NewServer(t testing.TB) *Server {
 	mux.HandleFunc("/.well-known/anubis-keys.json", s.keys)
 	mux.HandleFunc("/anubis.v1.AuthzService/Authorize", s.authorize)
 	mux.HandleFunc("/anubis.v1.AuthzService/Explain", s.explain)
+	mux.HandleFunc("/anubis.v1.AuthzService/ListGrantedNodes", s.listGrantedNodes)
 	mux.HandleFunc("/anubis.v1.AuthService/Refresh", s.refresh)
 	mux.HandleFunc("/anubis.v1.AuthService/Login", s.login)
 	mux.HandleFunc("/anubis.v1.AuthService/ClientCredentials", s.clientCredentials)
@@ -357,6 +360,41 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 		"currentAmr":  d.CurrentAMR.Strings(),
 		"authAge":     d.AuthAge,
 	})
+}
+
+// GrantNodes makes ListGrantedNodes answer g for subject + permission + axis.
+// Unset means Anubis's "unknown subject or permission": not_found.
+func (s *Server) GrantNodes(subject anubis.SubjectID, permission anubis.Permission, axis anubis.Axis, g anubis.GrantedNodes) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.granted[string(subject)+"|"+string(permission)+"|"+string(axis)] = g
+}
+
+func (s *Server) listGrantedNodes(w http.ResponseWriter, r *http.Request) {
+	s.count("ListGrantedNodes")
+	var req struct {
+		Subject    string            `json:"subject"`
+		Permission string            `json:"permission"`
+		Axis       string            `json:"axis"`
+		Scopes     map[string]string `json:"scopes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		connectError(w, http.StatusBadRequest, "invalid_argument", "bad body", "")
+		return
+	}
+	if r.Header.Get("Authorization") == "" {
+		connectError(w, http.StatusUnauthorized, "unauthenticated", "no credential", "req_test")
+		return
+	}
+	s.mu.Lock()
+	s.lastAsk = Ask{Subject: req.Subject, Permission: req.Permission, Scopes: req.Scopes}
+	g, ok := s.granted[req.Subject+"|"+req.Permission+"|"+req.Axis]
+	s.mu.Unlock()
+	if !ok {
+		connectError(w, http.StatusNotFound, "not_found", "unknown subject or permission", "req_test")
+		return
+	}
+	writeJSON(w, http.StatusOK, g)
 }
 
 func (s *Server) explain(w http.ResponseWriter, _ *http.Request) {
@@ -598,6 +636,8 @@ func domainCodeFor(message string) string {
 		return "refresh_token_reuse_detected"
 	case strings.Contains(message, "username or password"):
 		return "invalid_credentials"
+	case strings.Contains(message, "unknown subject or permission"):
+		return "not_found"
 	default:
 		return "unauthenticated"
 	}
