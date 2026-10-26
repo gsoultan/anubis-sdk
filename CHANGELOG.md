@@ -5,6 +5,24 @@ Format follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html), and while the major
 version is 0 the API may still move.
 
+## [Unreleased]
+
+### Added
+
+- `Client.GrantedNodes` / `GrantedNodesOf` wrap `AuthzService/ListGrantedNodes`:
+  where, on one axis, a subject may exercise a permission — asked once per
+  screen so an application filters its own query instead of calling
+  `Authorize` per row. `GrantedNodes.Nowhere()` is the empty state; `AsOf()`
+  says how fresh the gate snapshot it came from was. `anubistest.Server`
+  gained `GrantNodes` to script the answer.
+
+### Changed
+
+- `SwitchScope`'s doc no longer claims it is the only way to learn whether a
+  move is allowed. The server now refuses a place the caller holds no grant
+  at (`permission_denied`); it used to accept any active node on the right
+  axis, so a successful switch proved nothing. Re-vendored `authz.proto`.
+
 ## [0.2.2] — 2026-10-28
 
 Checked against the **Anubis v0.5.0 release**. Only `admin.proto` moved, and

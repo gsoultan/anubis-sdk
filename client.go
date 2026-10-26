@@ -28,6 +28,7 @@ const (
 	procAuthorize         = "/anubis.v1.AuthzService/Authorize"
 	procExplain           = "/anubis.v1.AuthzService/Explain"
 	procSwitchScope       = "/anubis.v1.AuthzService/SwitchScope"
+	procListGrantedNodes  = "/anubis.v1.AuthzService/ListGrantedNodes"
 	procIntrospect        = "/anubis.v1.TokenService/Introspect"
 	procRevoke            = "/anubis.v1.TokenService/Revoke"
 	procStreamRevocations = "/anubis.v1.TokenService/StreamRevocations"

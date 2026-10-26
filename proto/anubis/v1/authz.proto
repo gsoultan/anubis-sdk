@@ -15,6 +15,41 @@ service AuthzService {
   // Re-issue the caller's access token pinned to a different active scope,
   // without re-authentication. Mirrors AWS AssumeRole.
   rpc SwitchScope(SwitchScopeRequest) returns (SwitchScopeResponse);
+  // Where, on one axis, may the subject exercise the permission? Asked
+  // once per screen so an application can filter a list, instead of asking
+  // Authorize once per row. Served from the gate snapshot (as_of says how
+  // fresh); refused as unavailable rather than answered from a stale one.
+  rpc ListGrantedNodes(ListGrantedNodesRequest) returns (ListGrantedNodesResponse);
+}
+
+message ListGrantedNodesRequest {
+  string subject = 1;                 // identity id
+  string permission = 2;              // "app:resource:action"
+  string axis = 3;                    // the axis left open
+  // The OTHER axes, fixed (usually the session's active scope). A grant
+  // limited on an axis that is neither `axis` nor fixed here is dropped,
+  // the same fail-closed rule Authorize applies.
+  map<string, string> scopes = 4;
+}
+
+// One place a grant reaches. inherit: everything inside it too. except:
+// what the same grant carves out — it narrows THIS node only.
+message GrantedNode {
+  string node_id = 1;
+  bool inherit = 2;
+  repeated GrantedNode except = 3;
+}
+
+message ListGrantedNodesResponse {
+  // Some qualifying grant puts no limit on the axis: apply no filter.
+  // nodes is empty when this is set.
+  bool everywhere = 1;
+  // A self-scoped grant qualifies: rows the subject owns pass anywhere.
+  bool own_records = 2;
+  // Otherwise the places. All three unset means nowhere.
+  repeated GrantedNode nodes = 3;
+  // unix seconds: when the snapshot this was read from was current.
+  int64 as_of = 4;
 }
 
 message AuthorizeRequest {
