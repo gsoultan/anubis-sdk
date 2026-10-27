@@ -24,6 +24,11 @@ service IdentityAdminService {
   // Global kill switch: invalidates every outstanding token for the identity.
   rpc BumpTokenEpoch(BumpTokenEpochRequest) returns (BumpTokenEpochResponse);
   rpc SetPassword(SetPasswordRequest) returns (SetPasswordResponse);
+  // Install a password hash made by ANOTHER system (a migration), so the
+  // person keeps the password they know. Verified once at their next
+  // sign-in and replaced by a hash at this installation's cost. A legacy
+  // format must carry an expiry; after it the person needs a reset.
+  rpc ImportPasswordHash(ImportPasswordHashRequest) returns (ImportPasswordHashResponse);
   // Same human across realms. Records method and evidence; never merges grants.
   rpc LinkIdentities(LinkIdentitiesRequest) returns (LinkIdentitiesResponse);
   // Right-to-erasure: sets deletion_requested_at; the retention sweeper and
@@ -139,6 +144,21 @@ message SetPasswordRequest {
 }
 
 message SetPasswordResponse {}
+
+message ImportPasswordHashRequest {
+  string id = 1;
+  // Modular-crypt string as stored by the source system. Accepted today:
+  // bcrypt ($2a$/$2b$/$2y$) and Anubis's own $pbkdf2-sha256$.
+  string password_hash = 2;
+  // unix seconds. Required for a legacy format; 0 means no expiry and is
+  // allowed only for a hash in Anubis's own format.
+  int64 expires_at = 3;
+}
+
+message ImportPasswordHashResponse {
+  // What the server recognised, e.g. "bcrypt".
+  string algorithm = 1;
+}
 
 message LinkIdentitiesRequest {
   string primary_id = 1;
@@ -570,6 +590,29 @@ service AuthzAdminService {
   rpc UnassignMembership(UnassignMembershipRequest) returns (UnassignMembershipResponse);
   rpc ResyncMembership(ResyncMembershipRequest) returns (ResyncMembershipResponse);
   rpc ListMembershipAssignments(ListMembershipAssignmentsRequest) returns (ListMembershipAssignmentsResponse);
+  // SummarizeAccess says what each person on one page of the People list
+  // can do, in one call. At most 200 people.
+  rpc SummarizeAccess(SummarizeAccessRequest) returns (SummarizeAccessResponse);
+  // Bulk changes: find grants of one role, change one thing about all of
+  // them, as one recorded act that can be undone as one.
+  rpc PreviewGrantChange(PreviewGrantChangeRequest) returns (PreviewGrantChangeResponse);
+  rpc ApplyGrantChange(ApplyGrantChangeRequest) returns (ApplyGrantChangeResponse);
+  rpc UndoGrantChange(UndoGrantChangeRequest) returns (UndoGrantChangeResponse);
+  rpc ListGrantChanges(ListGrantChangesRequest) returns (ListGrantChangesResponse);
+  // ListFullLists finds hand-picked lists that name every place under one
+  // parent: a fixed list that looks like "all" but will miss the next one.
+  rpc ListFullLists(ListFullListsRequest) returns (ListFullListsResponse);
+  // PlaceReach answers, for one place: who already has it, and who holds a
+  // list naming all of its siblings and so might expect it too.
+  rpc PlaceReach(PlaceReachRequest) returns (PlaceReachResponse);
+  // RoleUsage counts the people holding each role. Empty role_ids: every role.
+  rpc RoleUsage(RoleUsageRequest) returns (RoleUsageResponse);
+  // AppUsage counts the people who hold any live role of one application.
+  rpc AppUsage(AppUsageRequest) returns (AppUsageResponse);
+  // HolderKinds sorts one role's grants by their reach on one kind of place.
+  rpc HolderKinds(HolderKindsRequest) returns (HolderKindsResponse);
+  // PlaceHolders lists who reaches a place by naming it or a place above it.
+  rpc PlaceHolders(PlaceHoldersRequest) returns (PlaceHoldersResponse);
   // Registers an application's permission/role/route catalog. Validates,
   // diffs, applies. Removed permissions are deprecated, never deleted.
   rpc ApplyManifest(ApplyManifestRequest) returns (ApplyManifestResponse);
@@ -702,6 +745,8 @@ message Role {
   // grant that already names it keeps working. Set when a manifest stops
   // naming a role it owns; authorize() never reads it.
   bool deprecated = 10;
+  // What the role allows, counting the roles it includes.
+  int32 permission_count = 11;
 }
 
 message ListRolesRequest {
@@ -753,6 +798,10 @@ message Permission {
   repeated string requires_amr = 9;
   string max_auth_age = 10;
   bool deprecated = 11;
+  // The module the app files this permission under, such as Payables. A
+  // label for people, never part of the key. Empty when the manifest names
+  // none.
+  string module = 12;
 }
 
 message ListPermissionsRequest {
@@ -1000,6 +1049,8 @@ service TenantAdminService {
   // UpdateTenant renames. The slug is not editable: it is in URLs, tokens and
   // every hosted page path, and changing it breaks links already in the world.
   rpc UpdateTenant(UpdateTenantRequest) returns (UpdateTenantResponse);
+  // MoveTenant changes which company owns this one. Installation owners only.
+  rpc MoveTenant(MoveTenantRequest) returns (MoveTenantResponse);
   rpc GetTenantStats(GetTenantStatsRequest) returns (GetTenantStatsResponse);
   // GetDashboard is the console overview: measured facts only — counts and
   // signals, never invented deltas or percentiles.
@@ -1153,6 +1204,9 @@ message Tenant {
   string name = 3;
   string status = 4;
   int64 created_at = 5;
+  // The company that owns this one, or empty for a top-level organisation.
+  // Ownership is for administration: whoever runs the parent runs this.
+  string parent_id = 6;
 }
 
 message ListTenantsRequest {}
@@ -1164,6 +1218,8 @@ message ListTenantsResponse {
 message CreateTenantRequest {
   string slug = 1;
   string name = 2;
+  // Create it inside this company. Empty: a new top-level organisation.
+  string parent_id = 3;
 }
 
 message CreateTenantResponse {
@@ -1271,6 +1327,10 @@ message Application {
   // slug. Empty means self only; without an entry a machine client cannot
   // mint a token audienced at another application.
   repeated string allowed_audiences = 13;
+  // Who may sign in to the app at all. "anyone" in its populations (the
+  // default, and every app before this field), or "role_holders": only
+  // people holding a live role that gives something in this app.
+  string sign_in = 14;
 }
 
 message ListApplicationsRequest {
@@ -1777,6 +1837,11 @@ message MyTenant {
   string role = 3;
   // all is true for an installation owner, who may enter any tenant.
   bool all = 4;
+  string id = 5;
+  // The owning company's id, so the console can draw the group as a tree.
+  string parent_id = 6;
+  // Reached through an assignment to a company above it, not one of its own.
+  bool inherited = 7;
 }
 
 message MyTenantsResponse {
@@ -1789,6 +1854,16 @@ message UpdateTenantRequest {
 }
 
 message UpdateTenantResponse {}
+
+// MoveTenantRequest puts a company under another, or at the top. Refused
+// when it would make a loop or nest deeper than six levels.
+message MoveTenantRequest {
+  string id = 1;
+  // Empty moves it to the top level.
+  string parent_id = 2;
+}
+
+message MoveTenantResponse {}
 
 message SetTenantStatusRequest {
   string id = 1;
@@ -1926,3 +2001,246 @@ message RevokeApiKeyRequest {
 }
 
 message RevokeApiKeyResponse {}
+
+// ---- access summaries, bulk changes and place reach -----------------------
+
+message SummarizeAccessRequest {
+  repeated string identity_ids = 1;
+}
+
+// AccessSummary is one person's live access in a sentence's worth of facts.
+message AccessSummary {
+  string identity_id = 1;
+  // Live grants given directly, and the distinct groups that give the rest.
+  int32 direct = 2;
+  int32 groups = 3;
+  // Up to three role names, then group names, alphabetically.
+  repeated string roles = 4;
+  repeated string group_names = 5;
+  // The soonest end date among live grants; 0 when none ends.
+  int64 next_end = 6;
+}
+
+message SummarizeAccessResponse {
+  repeated AccessSummary summaries = 1;
+}
+
+// GrantChangeFilter says which grants a bulk change is about. A change is
+// always about ONE role, so its preview is something a person can read.
+// Grants that come from a group are never matched: change the group.
+message GrantChangeFilter {
+  string role_id = 1;
+  // With covers_node_ids: only grants whose picks on this kind of place
+  // include every one of these places.
+  string axis = 2;
+  repeated string covers_node_ids = 3;
+  // Only grants whose picks name every other place beside this one under
+  // the same parent, and not this one: who might expect a new place.
+  string siblings_of = 4;
+}
+
+message GrantChangeSpec {
+  GrantChangeFilter filter = 1;
+  // add_place | remove_place | swap_place | grow | set_until | revoke
+  string kind = 2;
+  string axis = 3;
+  // add_place, remove_place: the place. swap_place: the place to replace.
+  // grow: the branch to grow into, or empty for everything on the axis.
+  string node_id = 4;
+  // swap_place: the place that replaces it.
+  string to_node_id = 5;
+  // add_place, swap_place: the new pick reaches what is inside it.
+  bool inherit = 6;
+  // set_until: unix seconds, 0 for no end date.
+  int64 valid_until = 7;
+  string reason = 8;
+}
+
+message PreviewGrantChangeRequest {
+  GrantChangeSpec change = 1;
+}
+
+message ApplyGrantChangeRequest {
+  GrantChangeSpec change = 1;
+}
+
+// GrantChangeRow is one grant as it is and as the change would leave it.
+message GrantChangeRow {
+  string grant_id = 1;
+  string identity_id = 2;
+  string username = 3;
+  repeated GrantScope before = 4;
+  repeated GrantScope after = 5;
+  int64 before_until = 6;
+  int64 after_until = 7;
+  bool revoked = 8;
+}
+
+// GrantChangeSkip is a group of matched grants the change leaves alone, and
+// why, so the count in the preview adds up.
+message GrantChangeSkip {
+  string reason = 1;
+  int32 count = 2;
+}
+
+message PreviewGrantChangeResponse {
+  int32 matched = 1;
+  int32 changes = 2;
+  int32 people = 3;
+  repeated GrantChangeSkip skipped = 4;
+  // The first rows that would change.
+  repeated GrantChangeRow sample = 5;
+}
+
+message ApplyGrantChangeResponse {
+  string change_id = 1;
+  int32 changed = 2;
+  repeated GrantChangeSkip skipped = 3;
+}
+
+message UndoGrantChangeRequest {
+  string change_id = 1;
+  string reason = 2;
+}
+
+message UndoGrantChangeResponse {
+  int32 restored = 1;
+}
+
+message GrantChange {
+  string id = 1;
+  string kind = 2;
+  string reason = 3;
+  int32 grants = 4;
+  int64 created_at = 5;
+  string actor_id = 6;
+  int64 undone_at = 7;
+  // The request as it was asked, for reading back.
+  string summary_json = 8;
+}
+
+message ListGrantChangesRequest {
+  int32 limit = 1;
+}
+
+message ListGrantChangesResponse {
+  repeated GrantChange changes = 1;
+}
+
+message ListFullListsRequest {
+  string axis = 1;     // empty: every kind of place
+  string role_id = 2;  // empty: every role
+}
+
+// FullList is a set of grants of one role whose picks name every place
+// under one parent, one by one.
+message FullList {
+  string axis = 1;
+  string parent_id = 2;
+  string parent_name = 3;
+  // The parent is the top of its kind: the list holds every place there is.
+  bool is_root = 4;
+  string role_id = 5;
+  string role_name = 6;
+  int32 grants = 7;
+  int32 places = 8;
+}
+
+message ListFullListsResponse {
+  repeated FullList lists = 1;
+}
+
+message PlaceReachRequest {
+  string node_id = 1;
+}
+
+// PlaceReachGroup is grants of one role that might expect a place.
+message PlaceReachGroup {
+  string role_id = 1;
+  string role_name = 2;
+  int32 people = 3;
+  string risk = 4;  // the riskiest permission the role gives
+}
+
+// PlaceReachEntry is a group (membership) whose entry lists every sibling.
+message PlaceReachEntry {
+  string membership_id = 1;
+  string membership_name = 2;
+  string role_name = 3;
+  int32 members = 4;
+}
+
+message PlaceReachResponse {
+  // People whose access already covers the place: with no limit on its
+  // kind, or a branch above it "and everything inside".
+  int32 have_all = 1;
+  int32 have_branch = 2;
+  repeated PlaceReachGroup might_expect = 3;
+  repeated PlaceReachEntry group_entries = 4;
+  // People with other hand-picked lists on this kind under the same parent.
+  int32 other_fixed = 5;
+}
+
+message RoleUsageRequest {
+  repeated string role_ids = 1;
+}
+
+message RoleUsage {
+  string role_id = 1;
+  int32 people = 2;
+  // Of those, the people who have it from a group.
+  int32 via_groups = 3;
+}
+
+message RoleUsageResponse {
+  repeated RoleUsage roles = 1;
+}
+
+message AppUsageRequest {
+  string application_id = 1;
+}
+
+message AppUsageResponse {
+  int32 people = 1;
+  int32 direct = 2;
+  int32 via_groups = 3;
+}
+
+message HolderKindsRequest {
+  string role_id = 1;
+  string axis = 2;
+}
+
+message HolderKindsResponse {
+  int32 total = 1;
+  // No list kept: every place of the kind, new ones included.
+  int32 everything = 2;
+  // Every pick is a place with places inside it, taken with them.
+  int32 branch = 3;
+  int32 fixed = 4;
+  // A required kind the grant names nothing in: it never applies.
+  int32 nothing = 5;
+  // Fixed lists that name every place under some parent by hand.
+  int32 full = 6;
+}
+
+message PlaceHoldersRequest {
+  string node_id = 1;
+  int32 limit = 2;
+}
+
+message PlaceHolder {
+  string identity_id = 1;
+  string username = 2;
+  string role_name = 3;
+  // Set when the access comes from a group.
+  string group_name = 4;
+  // The pick is this place alone, not what is inside it.
+  bool only_here = 5;
+  // The pick is a place above this one, with everything inside.
+  bool from_above = 6;
+}
+
+message PlaceHoldersResponse {
+  repeated PlaceHolder holders = 1;
+}
