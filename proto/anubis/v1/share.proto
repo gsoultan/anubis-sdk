@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package anubis.v1;
+
+option go_package = "github.com/gsoultan/anubis/gen/go/anubis/v1;anubisv1";
+
+// Record sharing: one person opening ONE record to another for a while, with
+// a subset of what they themselves may do on it. Bearer token of a tenant
+// person required — operators and services do not share.
+//
+// A share is consulted by Authorize only when the caller passes the reserved
+// "_record" target ("kind/ref"), beside the record's ordinary places. It
+// confers nothing anywhere else, always ends, and ends the moment it is
+// revoked. It never signs anybody in.
+service ShareService {
+  // You can only share what you can do: every permission is authorised for
+  // the caller at record_scopes before the share exists.
+  rpc Share(ShareRequest) returns (ShareResponse);
+  // The sharer may always; anybody else needs every permission the share
+  // confers, at the record's places.
+  rpc Unshare(UnshareRequest) returns (UnshareResponse);
+  // Live shares on a record the caller may see: theirs, to them, or whose
+  // every permission they hold.
+  rpc ListSharesOnRecord(ListSharesOnRecordRequest) returns (ListSharesOnRecordResponse);
+  rpc ListSharedWithMe(ListSharedWithMeRequest) returns (ListSharedWithMeResponse);
+  // The link a recipient with no password opens the record with, returned
+  // ONCE (making another replaces it). Anubis mails nothing: the
+  // application owns the record's URL and puts the token in its own
+  // message. Exchanged for a record-bound token by AuthService/OpenAccessLink.
+  rpc CreateAccessLink(CreateAccessLinkRequest) returns (CreateAccessLinkResponse);
+}
+
+message CreateAccessLinkRequest {
+  string share_id = 1;
+}
+
+message CreateAccessLinkResponse {
+  // "anb_lk_…". Show it once; it is not stored in the clear.
+  string link_token = 1;
+}
+
+message RecordShare {
+  string id = 1;
+  string record_kind = 2;
+  string record_ref = 3;
+  string from_identity_id = 4;
+  string to_identity_id = 5;
+  repeated string permissions = 6;
+  string note = 7;
+  int64 created_at = 8;   // unix seconds
+  int64 valid_until = 9;  // unix seconds
+  map<string, string> record_scopes = 10;
+}
+
+message ShareRequest {
+  string record_kind = 1;               // the application's noun, e.g. "job_requisition"
+  string record_ref = 2;                // the application's id for the one record
+  map<string, string> record_scopes = 3; // where it lives: the targets Authorize gets for it
+  string to_identity_id = 4;
+  repeated string permissions = 5;      // "app:resource:action", 1..32
+  int64 valid_until = 6;                // unix seconds; required, at most 90 days out
+  string note = 7;
+}
+
+message ShareResponse {
+  RecordShare share = 1;
+}
+
+message UnshareRequest {
+  string share_id = 1;
+  string reason = 2;
+}
+
+message UnshareResponse {}
+
+message ListSharesOnRecordRequest {
+  string record_kind = 1;
+  string record_ref = 2;
+  map<string, string> record_scopes = 3;
+}
+
+message ListSharesOnRecordResponse {
+  repeated RecordShare shares = 1;
+}
+
+message ListSharedWithMeRequest {}
+
+message ListSharedWithMeResponse {
+  repeated RecordShare shares = 1;
+}
