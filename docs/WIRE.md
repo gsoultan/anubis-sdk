@@ -405,8 +405,9 @@ X-Original-URI · X-Original-Method · X-Original-Host · X-Anubis-Tenant
 
 | Service | Methods used by the SDK |
 | :--- | :--- |
-| `AuthService` | `Login` `VerifyMfa` `Refresh` `Logout` `LogoutAll` `LogoutSession` `ClientCredentials` `BeginTotpEnrollment` `ConfirmTotpEnrollment` `Register` |
+| `AuthService` | `Login` `VerifyMfa` `Refresh` `Logout` `LogoutAll` `LogoutSession` `ClientCredentials` `BeginTotpEnrollment` `ConfirmTotpEnrollment` `Register` `OpenAccessLink` |
 | `AuthzService` | `Authorize` `Explain` `SwitchScope` `ListGrantedNodes` |
+| `ShareService` | `Share` `Unshare` `ListSharesOnRecord` `ListSharedWithMe` `CreateAccessLink` |
 | `TokenService` | `Introspect` `Revoke` `StreamRevocations` |
 | `SessionService` | `GetMe` `ListSessions` `RevokeSession` |
 

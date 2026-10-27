@@ -16,12 +16,21 @@ version is 0 the API may still move.
   says how fresh the gate snapshot it came from was. `anubistest.Server`
   gained `GrantNodes` to script the answer.
 
+- `Client.Share` / `Unshare` / `SharesOnRecord` / `SharedWithMe` wrap
+  `ShareService`: one person opening one record to another for a while.
+  `RecordTarget(kind, ref)` builds the `_record` scope entry Authorize needs
+  to consult a share. `CreateAccessLink` and `OpenAccessLink` are the door
+  for a recipient with no password: the link becomes a record-bound token
+  (amr `link`) that Anubis refuses for anything but that record.
+  `anubistest.Server` keeps shares and links in memory.
+
 ### Changed
 
 - `SwitchScope`'s doc no longer claims it is the only way to learn whether a
   move is allowed. The server now refuses a place the caller holds no grant
   at (`permission_denied`); it used to accept any active node on the right
-  axis, so a successful switch proved nothing. Re-vendored `authz.proto`.
+  axis, so a successful switch proved nothing. Re-vendored `auth.proto`,
+  `authz.proto`, `admin.proto` and the new `share.proto`.
 
 ## [0.2.0] — 2026-09-27
 
