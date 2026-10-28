@@ -21,6 +21,8 @@ import (
 type TenantRow struct {
 	ID, Slug, Name, Status string
 	CreatedAt              int64
+	// ParentID is the tenant this one sits inside.
+	ParentID string
 }
 
 // ApplicationRow is an application to register with AddApplication.
@@ -31,6 +33,8 @@ type ApplicationRow struct {
 	// AllowedAudiences is what the application's client_credentials tokens may
 	// be audienced at besides its own slug.
 	AllowedAudiences []string
+	// SignIn is anyone (the default) or role_holders.
+	SignIn string
 }
 
 // AddTenant registers a tenant.
@@ -110,7 +114,7 @@ func (s *Server) provisionRoutes(mux *http.ServeMux) {
 func tenantJSON(r *TenantRow) map[string]any {
 	return map[string]any{
 		"id": r.ID, "slug": r.Slug, "name": r.Name, "status": r.Status,
-		"createdAt": itoa64(r.CreatedAt),
+		"createdAt": itoa64(r.CreatedAt), "parentId": r.ParentID,
 	}
 }
 
@@ -125,11 +129,16 @@ func applicationJSON(r *ApplicationRow) map[string]any {
 	if aud == nil {
 		aud = []string{}
 	}
+	signIn := r.SignIn
+	if signIn == "" {
+		signIn = "anyone"
+	}
 	return map[string]any{
 		"id": r.ID, "slug": r.Slug, "name": r.Name, "kind": r.Kind,
 		"status": r.Status, "redirectUris": uris,
 		"manifestVersion":  r.ManifestVersion,
 		"allowedAudiences": aud,
+		"signIn":           signIn,
 	}
 }
 
@@ -347,6 +356,7 @@ func (s *Server) createApplication(w http.ResponseWriter, r *http.Request) {
 			Kind         string   `json:"kind"`
 			RedirectURIs []string `json:"redirectUris"`
 			Allowed      []string `json:"allowedAudiences"`
+			SignIn       string   `json:"signIn"`
 		} `json:"application"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
@@ -372,7 +382,7 @@ func (s *Server) createApplication(w http.ResponseWriter, r *http.Request) {
 	row := &ApplicationRow{
 		ID: id, Slug: a.Slug, Name: a.Name,
 		Kind: a.Kind, Status: "active", RedirectURIs: a.RedirectURIs,
-		AllowedAudiences: a.Allowed,
+		AllowedAudiences: a.Allowed, SignIn: a.SignIn,
 	}
 	s.applications[a.Slug] = row
 
@@ -394,6 +404,7 @@ func (s *Server) updateApplication(w http.ResponseWriter, r *http.Request) {
 			Status       string   `json:"status"`
 			RedirectURIs []string `json:"redirectUris"`
 			Allowed      []string `json:"allowedAudiences"`
+			SignIn       string   `json:"signIn"`
 		} `json:"application"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
@@ -411,6 +422,10 @@ func (s *Server) updateApplication(w http.ResponseWriter, r *http.Request) {
 		row.RedirectURIs = req.Application.RedirectURIs
 		// A rewrite, as on the server: omitting the list clears it.
 		row.AllowedAudiences = req.Application.Allowed
+		// Empty keeps who may sign in, as on the server.
+		if req.Application.SignIn != "" {
+			row.SignIn = req.Application.SignIn
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"application": applicationJSON(row)})
 		return
 	}

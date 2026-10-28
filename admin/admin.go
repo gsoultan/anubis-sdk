@@ -405,6 +405,9 @@ type Role struct {
 	// keeps working, so authorize() never reads this — but a picker that
 	// offers it is offering a dead end.
 	Deprecated bool `json:"deprecated"`
+	// PermissionCount is how many permissions the role confers, its own and
+	// those it inherits (Anubis v0.6.0).
+	PermissionCount int `json:"permissionCount"`
 }
 
 // Qualified is the role as tokens and grants spell it: "<app>.<name>".

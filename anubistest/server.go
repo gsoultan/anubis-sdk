@@ -22,6 +22,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -51,6 +52,9 @@ type Server struct {
 	granted   map[string]anubis.GrantedNodes
 	shares    map[string]*anubis.RecordShare
 	links     map[string]string // link token -> share id
+	// linkBearers are the access tokens OpenAccessLink minted. Like the
+	// server, the fake authenticates them on Authorize and nowhere else.
+	linkBearers map[string]bool
 	// liveRefresh is the refresh token currently valid for a session; a
 	// presentation of anything else that was ever issued is reuse.
 	liveRefresh map[string]string
@@ -137,6 +141,7 @@ func NewServer(t testing.TB) *Server {
 		granted:     map[string]anubis.GrantedNodes{},
 		shares:      map[string]*anubis.RecordShare{},
 		links:       map[string]string{},
+		linkBearers: map[string]bool{},
 		liveRefresh: map[string]string{},
 		issued:      map[string]string{},
 		consumed:    map[string]bool{},
@@ -382,6 +387,9 @@ func (s *Server) GrantNodes(subject anubis.SubjectID, permission anubis.Permissi
 
 func (s *Server) listGrantedNodes(w http.ResponseWriter, r *http.Request) {
 	s.count("ListGrantedNodes")
+	if s.refuseLink(w, r) {
+		return
+	}
 	var req struct {
 		Subject    string            `json:"subject"`
 		Permission string            `json:"permission"`
@@ -404,7 +412,36 @@ func (s *Server) listGrantedNodes(w http.ResponseWriter, r *http.Request) {
 		connectError(w, http.StatusNotFound, "not_found", "unknown subject or permission", "req_test")
 		return
 	}
-	writeJSON(w, http.StatusOK, g)
+	// protojson renders int64 as a quoted string; the fake must too, or a
+	// client that decodes a bare number passes here and fails on the server.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"everywhere": g.Everywhere, "ownRecords": g.OwnRecords, "nodes": g.Nodes,
+		"asOf": strconv.FormatInt(g.AsOfUnix, 10),
+	})
+}
+
+// shareJSON is a share as protojson renders it: lowerCamelCase, and int64 as
+// a quoted string.
+func shareJSON(sh *anubis.RecordShare) map[string]any {
+	return map[string]any{
+		"id": sh.ID, "recordKind": sh.RecordKind, "recordRef": sh.RecordRef,
+		"fromIdentityId": sh.FromIdentityID, "toIdentityId": sh.ToIdentityID,
+		"permissions": sh.Permissions, "note": sh.Note, "recordScopes": sh.RecordScopes,
+		"createdAt":  strconv.FormatInt(sh.CreatedAtUnix, 10),
+		"validUntil": strconv.FormatInt(sh.ValidUntilUnix, 10),
+	}
+}
+
+// refuseLink answers a link token as Anubis does on every procedure but
+// Authorize: it is not a sign-in, so it authenticates nobody.
+func (s *Server) refuseLink(w http.ResponseWriter, r *http.Request) bool {
+	s.mu.Lock()
+	link := s.linkBearers[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")]
+	s.mu.Unlock()
+	if link {
+		connectError(w, http.StatusUnauthorized, "unauthenticated", "an access-link token opens one record and signs nobody in", "req_test")
+	}
+	return link
 }
 
 // Shares: the fake accepts any share from an authenticated caller and keeps
@@ -413,6 +450,9 @@ func (s *Server) listGrantedNodes(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) share(w http.ResponseWriter, r *http.Request) {
 	s.count("Share")
+	if s.refuseLink(w, r) {
+		return
+	}
 	var req struct {
 		RecordKind   string            `json:"record_kind"`
 		RecordRef    string            `json:"record_ref"`
@@ -442,11 +482,14 @@ func (s *Server) share(w http.ResponseWriter, r *http.Request) {
 		CreatedAtUnix: time.Now().Unix(), ValidUntilUnix: req.ValidUntil, RecordScopes: req.RecordScopes}
 	s.shares[id] = sh
 	s.mu.Unlock()
-	writeJSON(w, http.StatusOK, map[string]any{"share": sh})
+	writeJSON(w, http.StatusOK, map[string]any{"share": shareJSON(sh)})
 }
 
 func (s *Server) unshare(w http.ResponseWriter, r *http.Request) {
 	s.count("Unshare")
+	if s.refuseLink(w, r) {
+		return
+	}
 	var req struct {
 		ShareID string `json:"share_id"`
 	}
@@ -464,28 +507,34 @@ func (s *Server) unshare(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) listSharesOnRecord(w http.ResponseWriter, r *http.Request) {
 	s.count("ListSharesOnRecord")
+	if s.refuseLink(w, r) {
+		return
+	}
 	var req struct {
 		RecordKind string `json:"record_kind"`
 		RecordRef  string `json:"record_ref"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	s.mu.Lock()
-	out := []*anubis.RecordShare{}
+	out := []map[string]any{}
 	for _, sh := range s.shares {
 		if sh.RecordKind == req.RecordKind && sh.RecordRef == req.RecordRef {
-			out = append(out, sh)
+			out = append(out, shareJSON(sh))
 		}
 	}
 	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"shares": out})
 }
 
-func (s *Server) listSharedWithMe(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) listSharedWithMe(w http.ResponseWriter, r *http.Request) {
 	s.count("ListSharedWithMe")
+	if s.refuseLink(w, r) {
+		return
+	}
 	s.mu.Lock()
-	out := []*anubis.RecordShare{}
+	out := []map[string]any{}
 	for _, sh := range s.shares {
-		out = append(out, sh)
+		out = append(out, shareJSON(sh))
 	}
 	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"shares": out})
@@ -493,6 +542,9 @@ func (s *Server) listSharedWithMe(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) createAccessLink(w http.ResponseWriter, r *http.Request) {
 	s.count("CreateAccessLink")
+	if s.refuseLink(w, r) {
+		return
+	}
 	var req struct {
 		ShareID string `json:"share_id"`
 	}
@@ -526,16 +578,22 @@ func (s *Server) openAccessLink(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.links[req.Token]
 	sh := s.shares[id]
 	s.mu.Unlock()
-	if !ok || sh == nil {
+	// Anubis's own applications are refused the same way: a record lives
+	// in a tenant's application, and "anubis" is the audience self-service
+	// trusts.
+	if !ok || sh == nil || req.ClientID == "anubis" || req.ClientID == "console" {
 		connectError(w, http.StatusUnauthorized, "unauthenticated", "invalid or expired link", "req_test")
 		return
 	}
+	tok := s.MintToken(anubis.Claims{
+		Subject: sh.ToIdentityID, Audience: []string{req.ClientID}, Tenant: anubis.TenantID(req.Tenant),
+		AMR: anubis.AuthMethods{"link"}, Scopes: anubis.Scopes{"_record": sh.RecordKind + "/" + sh.RecordRef},
+	})
+	s.mu.Lock()
+	s.linkBearers[tok] = true
+	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"tokens": map[string]any{
-		"accessToken": s.MintToken(anubis.Claims{
-			Subject: sh.ToIdentityID, Audience: []string{req.ClientID}, Tenant: anubis.TenantID(req.Tenant),
-			AMR: anubis.AuthMethods{"link"}, Scopes: anubis.Scopes{"_record": sh.RecordKind + "/" + sh.RecordRef},
-		}),
-		"tokenType": "Bearer", "expiresIn": 600,
+		"accessToken": tok, "tokenType": "Bearer", "expiresIn": 600,
 	}})
 }
 

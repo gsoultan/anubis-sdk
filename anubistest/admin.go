@@ -196,7 +196,7 @@ func (s *Server) listRoles(w http.ResponseWriter, _ *http.Request) {
 	s.count("ListRoles")
 	writeJSON(w, http.StatusOK, map[string]any{"roles": []map[string]any{{
 		"id": "rol_1", "name": "clerk", "applicationSlug": "billing",
-		"description": "approves invoices", "isSystem": false,
+		"description": "approves invoices", "isSystem": false, "permissionCount": 2,
 	}, {
 		// Retired from the catalog: still deciding for existing grants, but
 		// a picker that offers it is offering a dead end.

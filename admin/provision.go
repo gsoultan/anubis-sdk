@@ -86,6 +86,10 @@ type Tenant struct {
 	// Status is active, suspended or archived.
 	Status    string `json:"status"`
 	CreatedAt epoch  `json:"createdAt"`
+	// ParentID is the tenant this one sits inside (Anubis v0.6.0); empty for
+	// a top-level company. An operator who runs a company runs the ones
+	// inside it.
+	ParentID string `json:"parentId"`
 }
 
 // Created is when the tenant was created.
@@ -280,7 +284,22 @@ type Application struct {
 	// read, edited and sent back carries this with it; one built from scratch
 	// and sent as an update clears the list.
 	AllowedAudiences []string `json:"allowedAudiences"`
+	// SignIn is who may sign in to the application at all (Anubis v0.6.0):
+	// SignInAnyone in its populations, or SignInRoleHolders, people holding
+	// a role in it — enforced at sign-in and again at every refresh. Empty on
+	// an update keeps what the application has.
+	SignIn string `json:"signIn,omitempty"`
 }
+
+// Who may sign in to an application.
+const (
+	SignInAnyone      = "anyone"
+	SignInRoleHolders = "role_holders"
+)
+
+// OnlyRoleHolders reports whether a person needs a role in the application
+// to sign in to it.
+func (a Application) OnlyRoleHolders() bool { return a.SignIn == SignInRoleHolders }
 
 // NeedsClientSecret reports whether this kind of application is issued one.
 func (a Application) NeedsClientSecret() bool {
