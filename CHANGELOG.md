@@ -5,7 +5,7 @@ Format follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html), and while the major
 version is 0 the API may still move.
 
-## [0.2.2] — 2026-10-22
+## [0.2.2] — 2026-10-28
 
 Checked against the **Anubis v0.5.0 release**. Only `admin.proto` moved, and
 of what moved, three fields land on messages this SDK already decodes — the
