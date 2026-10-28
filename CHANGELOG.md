@@ -5,7 +5,18 @@ Format follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html), and while the major
 version is 0 the API may still move.
 
-## [Unreleased]
+## [0.3.0] — 2026-10-28
+
+Checked against the **Anubis v0.6.0 release**. `auth.proto`, `authz.proto`
+and `admin.proto` moved and `share.proto` is new. Three of the new fields
+land on messages this SDK already decodes, the dangerous shape: each compiled
+and decoded into nothing.
+
+### Requires
+
+- **Anubis v0.6.0 or later** for everything under Added. Earlier servers
+  answer `unimplemented` for the new procedures and leave the new fields
+  empty.
 
 ### Added
 
@@ -15,22 +26,40 @@ version is 0 the API may still move.
   `Authorize` per row. `GrantedNodes.Nowhere()` is the empty state; `AsOf()`
   says how fresh the gate snapshot it came from was. `anubistest.Server`
   gained `GrantNodes` to script the answer.
-
 - `Client.Share` / `Unshare` / `SharesOnRecord` / `SharedWithMe` wrap
   `ShareService`: one person opening one record to another for a while.
   `RecordTarget(kind, ref)` builds the `_record` scope entry Authorize needs
   to consult a share. `CreateAccessLink` and `OpenAccessLink` are the door
   for a recipient with no password: the link becomes a record-bound token
-  (amr `link`) that Anubis refuses for anything but that record.
-  `anubistest.Server` keeps shares and links in memory.
+  (amr `link`). `anubistest.Server` keeps shares and links in memory.
+- `admin.Application.SignIn` (`SignInAnyone`, `SignInRoleHolders`) and
+  `OnlyRoleHolders()`: an app closed to role holders refuses everyone else at
+  sign-in and at refresh, and a console that could not read it could not say
+  why. Empty on an update keeps what the app has.
+- `admin.Tenant.ParentID`: the company a tenant sits inside. An operator who
+  runs a company runs the ones inside it.
+- `admin.Role.PermissionCount`.
 
 ### Changed
 
+- **A link token signs nobody in.** The server authenticates it on
+  `Authorize`, for its own subject and record, and answers every other
+  procedure `unauthenticated` (an `*AuthError`); a link cannot be opened in
+  Anubis's own applications. `anubistest` now does the same, so a test that
+  sends a link token to `Share` fails here as it would against the server.
 - `SwitchScope`'s doc no longer claims it is the only way to learn whether a
   move is allowed. The server now refuses a place the caller holds no grant
   at (`permission_denied`); it used to accept any active node on the right
-  axis, so a successful switch proved nothing. Re-vendored `auth.proto`,
-  `authz.proto`, `admin.proto` and the new `share.proto`.
+  axis, so a successful switch proved nothing.
+- Protos re-vendored from v0.6.0; `proto/SYNCED` is `v0.6.0`.
+
+### Not wrapped
+
+- Password reset and change (`RequestPasswordReset`, `CompletePasswordReset`,
+  `ChangePassword`), `ImportPasswordHash`, the bulk access changes
+  (`PreviewGrantChange`, `ApplyGrantChange`, `UndoGrantChange`,
+  `ListGrantChanges`), `MoveTenant` and the console's counting procedures are
+  reached with `Client.Call`.
 
 ## [0.2.2] — 2026-10-28
 

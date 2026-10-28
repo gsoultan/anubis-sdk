@@ -2,6 +2,7 @@ package anubis
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -145,7 +146,7 @@ func (c *Client) OpenAccessLink(ctx context.Context, linkToken string) (*Tokens,
 		Tokens *Tokens `json:"tokens"`
 	}
 	req := map[string]any{"tenant": c.opts.tenant, "client_id": c.opts.clientID, "link_token": linkToken}
-	if err := c.rpc(ctx, procOpenAccessLink, req, &out); err != nil {
+	if err := c.rpcNoAuth(ctx, procOpenAccessLink, req, &out); err != nil {
 		return nil, err
 	}
 	if out.Tokens == nil {
@@ -153,4 +154,21 @@ func (c *Client) OpenAccessLink(ctx context.Context, linkToken string) (*Tokens,
 	}
 	c.stamp(out.Tokens)
 	return out.Tokens, nil
+}
+
+// UnmarshalJSON reads the share as protojson sends it, where the two int64
+// times arrive as quoted strings; a bare number is accepted too.
+func (s *RecordShare) UnmarshalJSON(b []byte) error {
+	type plain RecordShare
+	var wire struct {
+		plain
+		CreatedAtUnix  pbInt64 `json:"createdAt"`
+		ValidUntilUnix pbInt64 `json:"validUntil"`
+	}
+	if err := json.Unmarshal(b, &wire); err != nil {
+		return err
+	}
+	*s = RecordShare(wire.plain)
+	s.CreatedAtUnix, s.ValidUntilUnix = int64(wire.CreatedAtUnix), int64(wire.ValidUntilUnix)
+	return nil
 }

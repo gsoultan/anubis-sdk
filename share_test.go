@@ -2,6 +2,7 @@ package anubis_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -97,5 +98,94 @@ func TestShareRefusesAnUnboundedOrEmptyRequest(t *testing.T) {
 	}
 	if s.Calls["Share"] != 0 {
 		t.Fatalf("refused shares travelled: %+v", s.Calls)
+	}
+}
+
+// A link token opens one record and is a sign-in nowhere. From Anubis v0.6.0
+// the server authenticates it on Authorize and refuses it as unauthenticated
+// on every other procedure; the fake said yes, so an application that wired
+// a link token into Share passed its tests and failed against the server.
+func TestALinkTokenIsRefusedOutsideTheDecisionEndpoint(t *testing.T) {
+	s := anubistest.NewServer(t)
+	c := newClient(t, s)
+	owner := signedIn("usr_1", "pwd")
+	sh, err := c.Share(owner, anubis.ShareRequest{RecordKind: "job_requisition", RecordRef: "JR-0142",
+		To: "usr_2", Permissions: []anubis.Permission{"ats:requisition:comment"}, ValidUntil: time.Now().Add(time.Hour)})
+	if err != nil {
+		t.Fatalf("share: %v", err)
+	}
+	link, err := c.CreateAccessLink(owner, sh.ID)
+	if err != nil {
+		t.Fatalf("link: %v", err)
+	}
+	tokens, err := c.OpenAccessLink(context.Background(), link)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	claims, err := s.Verifier(app).Verify(context.Background(), tokens.AccessToken)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	holder := anubis.WithPrincipal(context.Background(), &anubis.Principal{Token: tokens.AccessToken, Claims: claims})
+	// A client with no key of its own presents the caller's token, which is
+	// how a link token reaches Anubis at all.
+	c, err = anubis.New(s.URL, anubis.WithApplication(app, ""), anubis.WithTenant("impack"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := c.Share(holder, anubis.ShareRequest{RecordKind: "job_requisition", RecordRef: "JR-0999",
+		To: "usr_3", Permissions: []anubis.Permission{"ats:requisition:comment"}, ValidUntil: time.Now().Add(time.Hour)}); !isAuthError(err) {
+		t.Errorf("Share with a link token: %v, want unauthenticated", err)
+	}
+	if _, err := c.SharedWithMe(holder); !isAuthError(err) {
+		t.Errorf("SharedWithMe with a link token: %v, want unauthenticated", err)
+	}
+	if _, err := c.CreateAccessLink(holder, sh.ID); !isAuthError(err) {
+		t.Errorf("CreateAccessLink with a link token: %v, want unauthenticated", err)
+	}
+	if _, err := c.Authorize(holder, "ats:requisition:comment", anubis.Scopes{"_record": "job_requisition/JR-0142"}); err != nil {
+		t.Errorf("Authorize with a link token: %v, want a decision", err)
+	}
+}
+
+// Nor can a link be opened in Anubis's own applications: a token for
+// "anubis" is the audience the account's self-service trusts.
+func TestALinkCannotBeOpenedInAnubisItself(t *testing.T) {
+	s := anubistest.NewServer(t)
+	owner := signedIn("usr_1", "pwd")
+	c := newClient(t, s)
+	sh, _ := c.Share(owner, anubis.ShareRequest{RecordKind: "k", RecordRef: "r", To: "usr_2",
+		Permissions: []anubis.Permission{"a:b:c"}, ValidUntil: time.Now().Add(time.Hour)})
+	link, _ := c.CreateAccessLink(owner, sh.ID)
+	for _, slug := range []string{"anubis", "console"} {
+		in := newClient(t, s, anubis.WithApplication(slug, ""))
+		if _, err := in.OpenAccessLink(context.Background(), link); err == nil {
+			t.Errorf("a link opened in %q", slug)
+		}
+	}
+}
+
+func isAuthError(err error) bool {
+	var ae *anubis.AuthError
+	return errors.As(err, &ae)
+}
+
+// Opening a link is the recipient's way in, so it needs no credential: the
+// server serves it without a bearer. The client attached one and, holding
+// none, refused before the trip.
+func TestOpeningALinkNeedsNoCredential(t *testing.T) {
+	s := anubistest.NewServer(t)
+	owner := signedIn("usr_1", "pwd")
+	keyed := newClient(t, s)
+	sh, _ := keyed.Share(owner, anubis.ShareRequest{RecordKind: "k", RecordRef: "r", To: "usr_2",
+		Permissions: []anubis.Permission{"a:b:c"}, ValidUntil: time.Now().Add(time.Hour)})
+	link, _ := keyed.CreateAccessLink(owner, sh.ID)
+	page, err := anubis.New(s.URL, anubis.WithApplication(app, ""), anubis.WithTenant("impack"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokens, err := page.OpenAccessLink(context.Background(), link); err != nil || tokens.AccessToken == "" {
+		t.Fatalf("a keyless client could not open a link: %v", err)
 	}
 }

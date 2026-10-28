@@ -2,6 +2,7 @@ package anubis
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -91,4 +92,19 @@ func (c *Client) grantedNodes(ctx context.Context, subject SubjectID, permission
 		return nil, err
 	}
 	return &out, nil
+}
+
+// UnmarshalJSON reads as_of as protojson sends an int64: a quoted string.
+func (g *GrantedNodes) UnmarshalJSON(b []byte) error {
+	type plain GrantedNodes
+	var wire struct {
+		plain
+		AsOfUnix pbInt64 `json:"asOf"`
+	}
+	if err := json.Unmarshal(b, &wire); err != nil {
+		return err
+	}
+	*g = GrantedNodes(wire.plain)
+	g.AsOfUnix = int64(wire.AsOfUnix)
+	return nil
 }
