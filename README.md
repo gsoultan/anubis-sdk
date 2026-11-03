@@ -227,8 +227,10 @@ of your own database, and wrapping them would add a conversion at every call
 site to prevent nothing.
 
 > **`Identity` is a view of a SESSION, not of a person.** `roles` and `scopes`
-> are what the token was minted with — the roles held at issuance, and the ONE
-> node per axis the session is acting as. It is not everything the person is
+> are what the token was minted with — the roles held at issuance that matter
+> in the token's own application, and the ONE node per axis the session is
+> acting as. A token for `billing` carries no `hr.*` roles, so
+> `Roles.OfApp` of any app but the token's own comes back empty. It is not everything the person is
 > entitled to. That lives in grants, which carry many nodes per axis with
 > inheritance, and grants are the admin plane's business. There is no procedure
 > today that lists the scope nodes somebody may switch to, so a scope picker
