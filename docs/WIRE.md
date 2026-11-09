@@ -232,7 +232,9 @@ application is accepted by another.
 `PAE` is pre-authentication encoding, and getting it subtly wrong produces a
 parser that verifies its own tokens and nothing else — the failure is silent
 until it meets a token it did not mint. The specification's golden vectors are
-asserted in [`paseto/paseto_test.go`](../paseto/paseto_test.go); check a new
+asserted in [`paseto/paseto_test.go`](../paseto/paseto_test.go), and the
+official `v4.public` token vectors in
+[`paseto/spec_vectors_test.go`](../paseto/spec_vectors_test.go); check a new
 implementation against those rather than against this one, since the vectors
 belong to the format and this SDK does not.
 

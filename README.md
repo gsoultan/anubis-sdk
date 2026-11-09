@@ -31,7 +31,9 @@ Read [Four things worth knowing before you ship](#four-things-worth-knowing-befo
 first. Those four are what a hand-written client most often gets wrong, and
 three of them are silent when they are wrong. For PASETO itself,
 [`paseto/paseto_test.go`](paseto/paseto_test.go) asserts the specification's
-PAE golden vectors — check a hand-written implementation against those rather
+PAE golden vectors and [`paseto/spec_vectors_test.go`](paseto/spec_vectors_test.go)
+the official `v4.public` test vectors (4-S-1 to 4-S-3, plus the expect-fail
+ones) — check a hand-written implementation against those rather
 than against this one.
 
 ## The shape of an integration
@@ -261,7 +263,8 @@ private and CI has none.
 toolchain pinned, so a missing `go` on a developer machine cannot read as a
 pass.
 
-`paseto/` asserts the specification's PAE golden vectors, which pins token
+`paseto/` asserts the specification's PAE golden vectors and the official
+`v4.public` test vectors, which pins token
 handling byte for byte against the format rather than against this
 implementation of it.
 
